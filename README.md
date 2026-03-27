@@ -229,6 +229,7 @@ What it means:
 - `Push` merges this device into the shared Google Sheet
 - `Pull` merges the shared Google Sheet into this device
 - Google Sheets writes full stock names like `REAL ACCOUNT` and `PREMIUM ACCOUNT` instead of short codes
+- deleting an account locally now creates a sync marker, so the next push can remove that same account from Google Sheets too
 - if the same account shows up on two devices, sync now tries to merge it by email/link instead of cloning it
 - if two devices created different accounts with the same code, sync reassigns one code automatically to avoid overwriting
 

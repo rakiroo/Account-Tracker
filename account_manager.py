@@ -171,6 +171,7 @@ def default_database():
     return {
         'accounts': {},
         'sold_accounts': {},
+        'deleted_accounts': [],
         'pricing': {
             'samples': [],
         },
@@ -461,6 +462,59 @@ def normalize_stock_profiles(raw_profiles):
     return profiles
 
 
+def deleted_account_signature(entry):
+    return (
+        str(entry.get('code', '')).strip().upper(),
+        str(entry.get('email', '')).strip().lower(),
+        normalize_optional_text(entry.get('link', '')).lower(),
+        normalize_stock_name(entry.get('stock_name', '')),
+        str(entry.get('name', '')).strip().lower(),
+    )
+
+
+def normalize_deleted_accounts(raw_deleted_accounts):
+    if isinstance(raw_deleted_accounts, dict):
+        candidate_items = raw_deleted_accounts.values()
+    elif isinstance(raw_deleted_accounts, list):
+        candidate_items = raw_deleted_accounts
+    else:
+        return []
+
+    normalized = {}
+    for item in candidate_items:
+        if not isinstance(item, dict):
+            continue
+
+        record = {
+            'code': str(item.get('code', '')).strip().upper(),
+            'stock_name': normalize_stock_name(item.get('stock_name', '')),
+            'name': str(item.get('name', '')).strip(),
+            'link': normalize_optional_text(item.get('link', '')),
+            'email': str(item.get('email', '')).strip(),
+            'password': str(item.get('password', '')).strip(),
+            'deleted_at': str(item.get('deleted_at', item.get('updated_at', ''))).strip(),
+        }
+
+        signature = deleted_account_signature(record)
+        if not any(signature):
+            continue
+
+        existing = normalized.get(signature)
+        if not existing or record['deleted_at'] >= existing.get('deleted_at', ''):
+            normalized[signature] = record
+
+    return sorted(
+        normalized.values(),
+        key=lambda entry: (
+            entry.get('deleted_at', ''),
+            entry.get('code', ''),
+            entry.get('email', ''),
+            entry.get('name', ''),
+        ),
+        reverse=True,
+    )
+
+
 def normalize_data(raw_data):
     database = default_database()
     if not isinstance(raw_data, dict):
@@ -469,6 +523,7 @@ def normalize_data(raw_data):
     if 'accounts' in raw_data or 'pricing' in raw_data or 'stock_profiles' in raw_data or 'tag_profiles' in raw_data:
         database['accounts'] = normalize_accounts(raw_data.get('accounts', {}))
         database['sold_accounts'] = normalize_sold_accounts(raw_data.get('sold_accounts', {}))
+        database['deleted_accounts'] = normalize_deleted_accounts(raw_data.get('deleted_accounts', []))
 
         pricing = raw_data.get('pricing', {})
         if isinstance(pricing, dict):
@@ -509,6 +564,24 @@ def save_data_to_path(data, path):
 
     with open(path, 'w', encoding='utf-8') as file_handle:
         json.dump(data, file_handle, indent=2, ensure_ascii=False)
+
+
+def build_deleted_account_entry(account, deleted_at=''):
+    return {
+        'code': str(account.get('code', '')).strip().upper(),
+        'stock_name': normalize_stock_name(account.get('stock_name', '')),
+        'name': str(account.get('name', '')).strip(),
+        'link': normalize_optional_text(account.get('link', '')),
+        'email': str(account.get('email', '')).strip(),
+        'password': str(account.get('password', '')).strip(),
+        'deleted_at': str(deleted_at or current_timestamp_text()).strip(),
+    }
+
+
+def remember_deleted_account(data, account, deleted_at=''):
+    deleted_accounts = list(data.get('deleted_accounts', []))
+    deleted_accounts.append(build_deleted_account_entry(account, deleted_at=deleted_at))
+    data['deleted_accounts'] = normalize_deleted_accounts(deleted_accounts)
 
 
 def format_php(amount):
@@ -1682,10 +1755,12 @@ def push_google_sheets_backup(data):
             f'Spreadsheet: {summary["spreadsheet_title"]}',
             f'Active accounts in merged backup: {summary["active_account_count"]}',
             f'Sold accounts in merged backup: {summary["sold_account_count"]}',
+            f'Deleted-account sync markers: {summary["deleted_account_count"]}',
             f'Probable duplicates merged: {summary["duplicates_merged"]}',
             f'Code collisions reassigned: {summary["code_collisions_resolved"]}',
             f'Same-code account updates merged: {summary["same_code_updates"]}',
             f'Sold state wins applied: {summary["sold_promotions"]}',
+            f'Deletions applied to merged backup: {summary["deletions_applied"]}',
             f'Ambiguous duplicates kept separate: {summary["ambiguous_duplicates"]}',
             f'Market sample rows in backup: {summary["market_sample_count"]}',
             'This device was also updated with the merged result.',
@@ -1746,10 +1821,12 @@ def pull_google_sheets_backup(data):
             f'Spreadsheet: {summary["spreadsheet_title"]}',
             f'Active accounts after merge: {store_summary["inventory_count"]}',
             f'Sold accounts after merge: {sales_summary["sold_count"]}',
+            f'Deleted-account sync markers: {summary["deleted_account_count"]}',
             f'Probable duplicates merged: {summary["duplicates_merged"]}',
             f'Code collisions reassigned: {summary["code_collisions_resolved"]}',
             f'Same-code account updates merged: {summary["same_code_updates"]}',
             f'Sold state wins applied: {summary["sold_promotions"]}',
+            f'Deletions applied during merge: {summary["deletions_applied"]}',
             f'Ambiguous duplicates kept separate: {summary["ambiguous_duplicates"]}',
             f'Market sample rows after merge: {summary["market_sample_count"]}',
             f'Safety backup saved at: {PRE_SHEETS_PULL_BACKUP_FILE}',
@@ -1784,6 +1861,7 @@ def delete_account(data):
         'bold',
     ).strip().lower()
     if confirm == 'y':
+        remember_deleted_account(data, account)
         del data['accounts'][code]
         save_data(data)
         print_success('Deleted.')

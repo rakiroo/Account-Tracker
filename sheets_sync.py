@@ -29,6 +29,7 @@ SPREADSHEET_URL_PATTERN = re.compile(r'https://docs\.google\.com/spreadsheets/')
 
 WORKSHEET_ACCOUNTS = 'accounts'
 WORKSHEET_SOLD_ACCOUNTS = 'sold_accounts'
+WORKSHEET_DELETED_ACCOUNTS = 'deleted_accounts'
 WORKSHEET_MARKET_SAMPLES = 'market_samples'
 WORKSHEET_STOCK_PROFILES = 'stock_profiles'
 WORKSHEET_META = 'meta'
@@ -53,6 +54,16 @@ SOLD_ACCOUNT_HEADERS = ACCOUNT_HEADERS + [
     'price_difference_php',
     'price_difference_percent',
     'pricing_source',
+]
+
+DELETED_ACCOUNT_HEADERS = [
+    'code',
+    'stock_name',
+    'name',
+    'link',
+    'email',
+    'password',
+    'deleted_at',
 ]
 
 MARKET_SAMPLE_HEADERS = [
@@ -299,6 +310,23 @@ def rows_from_stock_profiles(data):
     return rows
 
 
+def rows_from_deleted_accounts(data):
+    rows = []
+    for entry in data.get('deleted_accounts', []):
+        rows.append(
+            [
+                str(entry.get('code', '')),
+                str(core.get_stock_sheet_name(entry.get('stock_name', ''))),
+                str(entry.get('name', '')),
+                str(entry.get('link', '')),
+                str(entry.get('email', '')),
+                str(entry.get('password', '')),
+                str(entry.get('deleted_at', '')),
+            ]
+        )
+    return rows
+
+
 def rows_from_meta(data, merge_summary=None):
     merge_summary = merge_summary or {}
     rows = [
@@ -306,10 +334,12 @@ def rows_from_meta(data, merge_summary=None):
         ['pushed_at', current_sync_timestamp()],
         ['active_account_count', str(len(data['accounts']))],
         ['sold_account_count', str(len(data.get('sold_accounts', {})))],
+        ['deleted_account_count', str(len(data.get('deleted_accounts', [])))],
         ['global_market_sample_count', str(len(data['pricing']['samples']))],
         ['duplicates_merged', str(merge_summary.get('duplicates_merged', 0))],
         ['code_collisions_resolved', str(merge_summary.get('code_collisions_resolved', 0))],
         ['ambiguous_duplicates', str(merge_summary.get('ambiguous_duplicates', 0))],
+        ['deletions_applied', str(merge_summary.get('deletions_applied', 0))],
     ]
     return rows
 
@@ -317,6 +347,7 @@ def rows_from_meta(data, merge_summary=None):
 def read_spreadsheet_snapshot(spreadsheet):
     accounts_rows = worksheet_values_to_rows(get_worksheet_values(spreadsheet, WORKSHEET_ACCOUNTS))
     sold_rows = worksheet_values_to_rows(get_worksheet_values(spreadsheet, WORKSHEET_SOLD_ACCOUNTS))
+    deleted_rows = worksheet_values_to_rows(get_worksheet_values(spreadsheet, WORKSHEET_DELETED_ACCOUNTS))
     market_rows = worksheet_values_to_rows(get_worksheet_values(spreadsheet, WORKSHEET_MARKET_SAMPLES))
     profile_rows = worksheet_values_to_rows(get_worksheet_values(spreadsheet, WORKSHEET_STOCK_PROFILES))
     meta_rows = worksheet_values_to_rows(get_worksheet_values(spreadsheet, WORKSHEET_META))
@@ -362,6 +393,19 @@ def read_spreadsheet_snapshot(spreadsheet):
             'pricing_source': row.get('pricing_source', ''),
         }
 
+    raw_data['deleted_accounts'] = [
+        {
+            'code': str(row.get('code', '')).strip().upper(),
+            'stock_name': core.normalize_stock_name(row.get('stock_name', '')),
+            'name': row.get('name', ''),
+            'link': row.get('link', ''),
+            'email': row.get('email', ''),
+            'password': row.get('password', ''),
+            'deleted_at': row.get('deleted_at', ''),
+        }
+        for row in deleted_rows
+    ]
+
     for row in profile_rows:
         stock_name = core.normalize_stock_name(row.get('stock_name', ''))
         if stock_name not in core.STOCK_CHOICES:
@@ -386,6 +430,7 @@ def read_spreadsheet_snapshot(spreadsheet):
     return normalized, {
         'spreadsheet_title': spreadsheet.title,
         'meta': meta_rows_to_dict(meta_rows),
+        'deleted_account_count': len(normalized.get('deleted_accounts', [])),
         'market_sample_count': len(market_rows),
         'stock_profile_count': len(profile_rows),
     }
@@ -405,6 +450,7 @@ def build_merge_summary():
         'code_collision_details': [],
         'same_code_updates': 0,
         'sold_promotions': 0,
+        'deletions_applied': 0,
         'market_sample_duplicates_skipped': 0,
     }
 
@@ -452,6 +498,14 @@ def duplicate_reason_tokens(existing_record, incoming_record):
 
 def records_refer_to_same_account(existing_record, incoming_record):
     return bool(duplicate_reason_tokens(existing_record, incoming_record))
+
+
+def tombstone_matches_record(tombstone, record):
+    tombstone_code = str(tombstone.get('code', '')).strip().upper()
+    record_code = str(record.get('code', '')).strip().upper()
+    if tombstone_code and record_code and tombstone_code == record_code:
+        return True
+    return bool(duplicate_reason_tokens(tombstone, record))
 
 
 def account_record_timestamp(record):
@@ -597,6 +651,38 @@ def merge_account_records(existing_record, incoming_record, incoming_preferred=F
 
 def all_used_codes(data):
     return set(data['accounts'].keys()) | set(data.get('sold_accounts', {}).keys())
+
+
+def merge_deleted_accounts(base_deleted_accounts, incoming_deleted_accounts):
+    merged = list(base_deleted_accounts) + list(incoming_deleted_accounts)
+    return core.normalize_deleted_accounts(merged)
+
+
+def tombstone_is_newer_than_record(tombstone, record):
+    deleted_at = parse_timestamp(tombstone.get('deleted_at'))
+    record_timestamp = account_record_timestamp(record)
+    if deleted_at and record_timestamp:
+        return deleted_at >= record_timestamp
+    if deleted_at and not record_timestamp:
+        return True
+    return True
+
+
+def apply_deleted_accounts(data, deleted_accounts, summary):
+    removed_codes = set()
+    for tombstone in deleted_accounts:
+        for section in ('accounts', 'sold_accounts'):
+            for code, record in list(data.get(section, {}).items()):
+                if code in removed_codes:
+                    continue
+                if not tombstone_matches_record(tombstone, record):
+                    continue
+                if not tombstone_is_newer_than_record(tombstone, record):
+                    continue
+                del data[section][code]
+                removed_codes.add(code)
+
+    summary['deletions_applied'] += len(removed_codes)
 
 
 def store_record(data, section, record):
@@ -791,6 +877,11 @@ def merge_stock_profiles(base_profiles, incoming_profiles, incoming_preferred):
 def merge_databases(base_data, incoming_data, incoming_label='incoming', incoming_preferred=True):
     merged = clone_database(base_data)
     summary = build_merge_summary()
+    merged['deleted_accounts'] = merge_deleted_accounts(
+        merged.get('deleted_accounts', []),
+        incoming_data.get('deleted_accounts', []),
+    )
+    apply_deleted_accounts(merged, merged.get('deleted_accounts', []), summary)
 
     merge_records_into_data(
         merged,
@@ -808,6 +899,7 @@ def merge_databases(base_data, incoming_data, incoming_label='incoming', incomin
         summary=summary,
         source_label=incoming_label,
     )
+    apply_deleted_accounts(merged, merged.get('deleted_accounts', []), summary)
 
     all_samples = []
     for sample in merged['pricing']['samples']:
@@ -848,6 +940,7 @@ def build_result_summary(spreadsheet, data, merge_summary, snapshot_info=None):
         'spreadsheet_title': spreadsheet.title,
         'active_account_count': len(data['accounts']),
         'sold_account_count': len(data.get('sold_accounts', {})),
+        'deleted_account_count': len(data.get('deleted_accounts', [])),
         'market_sample_count': len(rows_from_market_samples(data)),
         'stock_profile_count': len(core.STOCK_CHOICES),
         'duplicates_merged': merge_summary['duplicates_merged'],
@@ -855,6 +948,7 @@ def build_result_summary(spreadsheet, data, merge_summary, snapshot_info=None):
         'code_collisions_resolved': merge_summary['code_collisions_resolved'],
         'same_code_updates': merge_summary['same_code_updates'],
         'sold_promotions': merge_summary['sold_promotions'],
+        'deletions_applied': merge_summary['deletions_applied'],
         'market_sample_duplicates_skipped': merge_summary['market_sample_duplicates_skipped'],
         'sheet_last_push_at': snapshot_info.get('meta', {}).get('pushed_at', ''),
     }
@@ -881,6 +975,12 @@ def push_data_to_sheets(local_data):
         WORKSHEET_SOLD_ACCOUNTS,
         SOLD_ACCOUNT_HEADERS,
         rows_from_account_records(merged_data.get('sold_accounts', {}), include_sale_fields=True),
+    )
+    write_rows_to_worksheet(
+        spreadsheet,
+        WORKSHEET_DELETED_ACCOUNTS,
+        DELETED_ACCOUNT_HEADERS,
+        rows_from_deleted_accounts(merged_data),
     )
     write_rows_to_worksheet(
         spreadsheet,
