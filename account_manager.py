@@ -2,12 +2,13 @@
 """Termux account storage CLI with tag-based pricing."""
 
 import getpass
-import hashlib
 import json
 import os
 
 DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
 VALID_TAGS = ('RA', 'RP', 'MX', 'ON')
+ACCOUNT_CODE_PREFIX = 'ACC-'
+ACCOUNT_CODE_DIGITS = 4
 
 
 def default_tag_profiles():
@@ -30,21 +31,92 @@ def default_database():
     }
 
 
+def looks_like_account_code(value):
+    if not isinstance(value, str):
+        return False
+
+    normalized = value.strip().upper()
+    return normalized.startswith(ACCOUNT_CODE_PREFIX) and normalized[len(ACCOUNT_CODE_PREFIX):].isdigit()
+
+
+def make_account_code(number):
+    return f'{ACCOUNT_CODE_PREFIX}{number:0{ACCOUNT_CODE_DIGITS}d}'
+
+
+def generate_unique_account_code(used_codes):
+    highest_number = 0
+    for code in used_codes:
+        if looks_like_account_code(code):
+            highest_number = max(highest_number, int(code[len(ACCOUNT_CODE_PREFIX):]))
+
+    next_number = highest_number + 1
+    while True:
+        code = make_account_code(next_number)
+        if code not in used_codes:
+            return code
+        next_number += 1
+
+
 def normalize_accounts(accounts):
     if not isinstance(accounts, dict):
         return {}
 
     normalized = {}
+    used_codes = set()
+    pending_records = []
+
     for name, info in accounts.items():
         if not isinstance(info, dict):
             continue
 
-        normalized[name] = {
+        raw_key = str(name).strip()
+        password = str(info.get('password', '')).strip()
+        legacy_password_hash = str(
+            info.get('legacy_password_hash') or info.get('password_hash', '')
+        ).strip()
+        fbfs = info.get('fbfs', 0)
+        try:
+            fbfs = int(fbfs)
+        except (TypeError, ValueError):
+            fbfs = 0
+        if fbfs < 0:
+            fbfs = 0
+
+        stock_name = str(info.get('stock_name', '')).strip()
+        if not stock_name and raw_key and not looks_like_account_code(raw_key):
+            stock_name = raw_key
+
+        record = {
+            'code': str(info.get('code', '')).strip().upper(),
+            'stock_name': stock_name,
+            'name': str(info.get('name', '')).strip(),
+            'link': str(info.get('link', '')).strip(),
             'email': str(info.get('email', '')).strip(),
-            'password_hash': str(info.get('password_hash', '')).strip(),
+            'password': password,
+            'legacy_password_hash': legacy_password_hash,
             'tag': str(info.get('tag', '')).upper().strip(),
             'notes': str(info.get('notes', '')).strip(),
+            'fbfs': fbfs,
         }
+
+        if not record['code'] and looks_like_account_code(raw_key):
+            record['code'] = raw_key.upper()
+
+        if record['code'] and looks_like_account_code(record['code']) and record['code'] not in used_codes:
+            used_codes.add(record['code'])
+            if not record['stock_name']:
+                record['stock_name'] = record['name'] or record['code']
+            normalized[record['code']] = record
+        else:
+            pending_records.append(record)
+
+    for record in pending_records:
+        code = generate_unique_account_code(used_codes)
+        record['code'] = code
+        if not record['stock_name']:
+            record['stock_name'] = record['name'] or code
+        used_codes.add(code)
+        normalized[code] = record
 
     return normalized
 
@@ -134,10 +206,6 @@ def save_data(data):
         json.dump(data, file_handle, indent=2, ensure_ascii=False)
 
 
-def hash_password(password):
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
-
-
 def format_php(amount):
     return f'PHP {amount:,.2f}'
 
@@ -210,6 +278,81 @@ def get_tag_info(data, tag):
     return str(profile.get('info', '')).strip()
 
 
+def generate_next_account_code(data):
+    return generate_unique_account_code(set(data['accounts'].keys()))
+
+
+def format_account_brief(data, account):
+    tag = account.get('tag', '')
+    metrics = get_tag_price_metrics(data, tag)
+
+    parts = [
+        account.get('code', 'NO-CODE'),
+        account.get('stock_name', 'Unnamed stock'),
+    ]
+    if account.get('name'):
+        parts.append(account['name'])
+    parts.append(f'[{tag}]')
+    parts.append(f'fbfs: {account.get("fbfs", 0)}')
+    if metrics:
+        parts.append(format_php(metrics['unit_price']))
+
+    return ' | '.join(parts)
+
+
+def search_accounts(data, query):
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        return []
+
+    normalized_code = cleaned_query.upper()
+    if normalized_code in data['accounts']:
+        return [data['accounts'][normalized_code]]
+
+    lowered_query = cleaned_query.lower()
+    exact_matches = []
+    partial_matches = []
+
+    for account in data['accounts'].values():
+        fields = [
+            account.get('code', ''),
+            account.get('stock_name', ''),
+            account.get('name', ''),
+            account.get('email', ''),
+        ]
+        lowered_fields = [field.lower() for field in fields if field]
+        if lowered_query in lowered_fields:
+            exact_matches.append(account)
+        elif any(lowered_query in field for field in lowered_fields):
+            partial_matches.append(account)
+
+    matches = exact_matches if exact_matches else partial_matches
+    return sorted(matches, key=lambda account: account.get('code', ''))
+
+
+def pick_account(data, prompt_message, empty_message='No matching account found.'):
+    query = input(prompt_message).strip()
+    matches = search_accounts(data, query)
+    if not matches:
+        print(empty_message)
+        return None
+
+    if len(matches) == 1:
+        return matches[0]
+
+    print('\nMultiple matches found:')
+    for account in matches:
+        print(f'- {format_account_brief(data, account)}')
+
+    matching_codes = {account.get('code', '') for account in matches}
+    chosen_code = input('Enter the account code to continue: ').strip().upper()
+    if chosen_code not in matching_codes:
+        print('Invalid code.')
+        return None
+
+    return data['accounts'][chosen_code]
+
+
 def get_store_value_summary(data):
     total_value = 0.0
     priced_accounts = 0
@@ -261,6 +404,24 @@ def prompt_positive_int(message):
     return value
 
 
+def prompt_non_negative_int(message, default=0):
+    raw_value = input(message).strip()
+    if not raw_value:
+        return default
+
+    try:
+        value = int(raw_value)
+    except ValueError:
+        print('Please enter a whole number.')
+        return None
+
+    if value < 0:
+        print('Value cannot be negative.')
+        return None
+
+    return value
+
+
 def prompt_tag(message, allow_blank=False):
     print(message)
     for index, tag in enumerate(VALID_TAGS, start=1):
@@ -300,17 +461,18 @@ def print_tag_snapshot(data, tag):
 
 def add_account(data):
     accounts = data['accounts']
-    name = input('Account/stock name (e.g. gmail, github, stock code): ').strip()
-    if not name:
-        print('Name cannot be empty.')
-        return
-
-    if name in accounts:
-        print('Account exists. Use a different name.')
+    stock_name = input('Stock/account name: ').strip()
+    account_name = input('Account name: ').strip()
+    link = input('Account link (optional): ').strip()
+    if not stock_name or not account_name:
+        print('Stock/account name and account name cannot be empty.')
         return
 
     email = input('Email: ').strip()
-    password = getpass.getpass('Password (hidden): ').strip()
+    password = getpass.getpass('Password: ').strip()
+    fbfs = prompt_non_negative_int('fbfs count (default 0): ')
+    if fbfs is None:
+        return
     tag = prompt_tag('Choose a tag for this account:')
     if tag is None:
         return
@@ -322,18 +484,26 @@ def add_account(data):
         print('Email and password cannot be empty.')
         return
 
-    accounts[name] = {
+    code = generate_next_account_code(data)
+    accounts[code] = {
+        'code': code,
+        'stock_name': stock_name,
+        'name': account_name,
+        'link': link,
         'email': email,
-        'password_hash': hash_password(password),
+        'password': password,
+        'legacy_password_hash': '',
         'tag': tag,
         'notes': notes,
+        'fbfs': fbfs,
     }
     save_data(data)
-    print(f'Added stock/account: {name} ({tag})')
+    print(f'Added stock/account: {stock_name} ({tag})')
+    print(f'Account code: {code}')
 
     metrics = get_tag_price_metrics(data, tag)
     if metrics:
-        print(f'Estimated price for {name}: {format_php(metrics["unit_price"])}')
+        print(f'Estimated price for {code}: {format_php(metrics["unit_price"])}')
 
 
 def list_accounts(data):
@@ -349,9 +519,13 @@ def list_accounts(data):
         info = get_tag_info(data, tag)
         metrics = get_tag_price_metrics(data, tag)
 
-        line = f'- {key} [{tag}]'
+        line = f'- {account.get("code", key)} | {account.get("stock_name", "Unnamed stock")}'
+        if account.get('name'):
+            line += f' | name: {account["name"]}'
+        line += f' [{tag}]'
         if info:
             line += f' | {info}'
+        line += f' | fbfs: {account.get("fbfs", 0)}'
         if metrics:
             line += f' -> {format_php(metrics["unit_price"])}'
         else:
@@ -367,25 +541,34 @@ def list_accounts(data):
 
 
 def show_account(data):
-    accounts = data['accounts']
-    name = input('Account name to view: ').strip()
-    if name not in accounts:
-        print('Not found.')
+    account = pick_account(data, 'Enter account code or name to fetch: ')
+    if not account:
         return
 
-    account = accounts[name]
     tag = account.get('tag', '')
     info = get_tag_info(data, tag)
     metrics = get_tag_price_metrics(data, tag)
+    password = account.get('password', '')
+    legacy_password_hash = account.get('legacy_password_hash', '')
 
     print(
-        f"\n{name}:"
+        f"\n{account.get('stock_name', 'Unnamed stock')}:"
+        f"\n  code: {account.get('code', 'no code')}"
+        f"\n  name: {account.get('name') or 'no name saved'}"
+        f"\n  link: {account.get('link') or 'no link saved'}"
         f"\n  email: {account.get('email')}"
         f"\n  tag: {tag}"
         f"\n  tag_info: {info or 'no saved info'}"
+        f"\n  fbfs: {account.get('fbfs', 0)}"
         f"\n  notes: {account.get('notes')}"
-        f"\n  password_hash: {account.get('password_hash')}"
     )
+    if password:
+        print(f'  password: {password}')
+    elif legacy_password_hash:
+        print(f'  legacy_password_hash: {legacy_password_hash}')
+        print('  password: old record still only has the previous hash')
+    else:
+        print('  password: not saved')
 
     if metrics:
         print(f'  estimated_price_php: {format_php(metrics["unit_price"])}')
@@ -395,15 +578,15 @@ def show_account(data):
 
 
 def delete_account(data):
-    accounts = data['accounts']
-    name = input('Account name to delete: ').strip()
-    if name not in accounts:
-        print('Not found.')
+    account = pick_account(data, 'Enter account code or name to delete: ')
+    if not account:
         return
 
-    confirm = input(f'Confirm delete {name}? (y/N): ').strip().lower()
+    code = account.get('code', '')
+    stock_name = account.get('stock_name', 'Unnamed stock')
+    confirm = input(f'Confirm delete {code} ({stock_name})? (y/N): ').strip().lower()
     if confirm == 'y':
-        del accounts[name]
+        del data['accounts'][code]
         save_data(data)
         print('Deleted.')
     else:
@@ -529,7 +712,7 @@ def main():
         print('\nChoose an action:')
         print('1) Add stock/account')
         print('2) List accounts')
-        print('3) View account')
+        print('3) View/fetch account')
         print('4) Delete account')
         print('5) Add market price sample')
         print('6) Set tag info')

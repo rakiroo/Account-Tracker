@@ -38,7 +38,7 @@ Your saved accounts and pricing data stay safe because they are stored outside t
 Menu options:
 - 1: Add account
 - 2: List accounts
-- 3: View account
+- 3: View/fetch account
 - 4: Delete account
 - 5: Add market price sample
 - 6: Set tag info
@@ -54,6 +54,44 @@ Each tag like `RA`, `RP`, `MX`, and `ON` can now have:
 When you add or view an account, the script will show:
 - the tag info for that account
 - the estimated price for that tag
+
+## Account Fields
+Each account now stores:
+- code
+- stock/account name
+- name
+- link
+- email
+- password
+- tag
+- fbfs
+- notes
+
+When adding an account, the script:
+- generates an account code automatically
+- asks for the account `name`
+- asks for the account `link`
+- asks for the `fbfs` count
+
+When you fetch an account, it shows the saved:
+- code
+- stock/account name
+- name
+- link
+- email
+- password
+- fbfs
+- price
+
+## Fetching Stock
+You can fetch or delete an account by:
+- account code
+- stock/account name
+- saved account name
+
+The best way is by account code because every account gets its own auto code, for example:
+- `ACC-0001`
+- `ACC-0002`
 
 ## Suggested Setup
 1. Choose `6) Set tag info`.
@@ -97,4 +135,6 @@ This is useful for Git + Termux because:
 - your stock list is not mixed into your repo files
 
 ## Note
-This script stores password hashes (SHA-256) and not plain passwords. If you want to store real passwords, modify it to save `password` directly, or use a secure vault like `pass` or `gpg`.
+This version stores passwords as plain text so you can view them later in Termux.
+
+Older records created in the previous version may still show a `legacy_password_hash` because hashes cannot be converted back into the original password. Re-save those accounts if you want the real password stored.
