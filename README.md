@@ -1,4 +1,4 @@
-# Termux Account Manager
+# MAUS Account Tracker
 
 ## Requirements
 - Termux on Android
@@ -31,6 +31,11 @@ Your saved accounts and pricing data stay safe because they are stored outside t
 ```bash
 python account_manager.py
 ```
+
+The app now uses a cleaner MAUS-themed terminal UI with:
+- a dashboard-style home screen
+- colored panels on supported terminals like Termux
+- cleaner action screens for add, fetch, pricing, and delete flows
 
 Menu options:
 - 1: Paste/add account(s)

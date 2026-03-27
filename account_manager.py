@@ -1,13 +1,136 @@
 #!/usr/bin/env python3
-"""Termux account storage CLI with stock-based pricing."""
+"""Termux account storage CLI with a phone-friendly MAUS interface."""
 
 import json
 import os
+import shutil
+import sys
+import textwrap
 
 DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
 STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP')
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
+APP_TITLE = 'MAUS ACCOUNT TRACKER'
+APP_SUBTITLE = 'Phone-ready stock console'
+APP_OWNER = 'Owner codename: MAUS'
+MENU_OPTIONS = (
+    ('1', 'Paste/add account(s)', 'Bulk add one stock batch at a time'),
+    ('2', 'List accounts', 'See every stored account and store value'),
+    ('3', 'View/fetch account', 'Open full details by code or name'),
+    ('4', 'Delete account', 'Remove a stock entry safely'),
+    ('5', 'Add market price sample', 'Feed auto-pricing with market data'),
+    ('6', 'Set stock info', 'Save notes for RA, PR, ON, MN, or RP'),
+    ('7', 'View pricing summary', 'Review prices, samples, and totals'),
+    ('8', 'Exit', 'Close the MAUS console'),
+)
+ANSI_CODES = {
+    'reset': '\033[0m',
+    'bold': '\033[1m',
+    'dim': '\033[2m',
+    'red': '\033[31m',
+    'green': '\033[32m',
+    'yellow': '\033[33m',
+    'blue': '\033[34m',
+    'magenta': '\033[35m',
+    'cyan': '\033[36m',
+    'white': '\033[37m',
+    'bright_black': '\033[90m',
+    'bright_red': '\033[91m',
+    'bright_green': '\033[92m',
+    'bright_yellow': '\033[93m',
+    'bright_blue': '\033[94m',
+    'bright_magenta': '\033[95m',
+    'bright_cyan': '\033[96m',
+}
+
+
+def color_enabled():
+    if os.environ.get('NO_COLOR'):
+        return False
+    return sys.stdout.isatty() and os.environ.get('TERM', '').lower() != 'dumb'
+
+
+def style(text, *tokens):
+    if not color_enabled():
+        return text
+
+    prefix = ''.join(ANSI_CODES.get(token, '') for token in tokens)
+    if not prefix:
+        return text
+    return f'{prefix}{text}{ANSI_CODES["reset"]}'
+
+
+def terminal_width():
+    try:
+        columns = shutil.get_terminal_size((84, 20)).columns
+    except OSError:
+        columns = 84
+    return min(max(columns, 30), 110)
+
+
+def wrap_text(value, width):
+    text = str(value)
+    if not text:
+        return ['']
+
+    return textwrap.wrap(
+        text,
+        width=width,
+        replace_whitespace=False,
+        drop_whitespace=False,
+        break_long_words=True,
+    ) or ['']
+
+
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def print_message(label, message, *tone):
+    print(style(f'[{label}] {message}', *tone))
+
+
+def print_info(message):
+    print_message('INFO', message, 'bright_cyan')
+
+
+def print_success(message):
+    print_message('OK', message, 'bold', 'bright_green')
+
+
+def print_warning(message):
+    print_message('WARN', message, 'bold', 'bright_yellow')
+
+
+def print_error(message):
+    print_message('ERROR', message, 'bold', 'bright_red')
+
+
+def prompt_input(message, *tone):
+    prompt = style(message, *(tone or ('bright_cyan', 'bold')))
+    return input(prompt)
+
+
+def print_panel(title, lines, tone='bright_blue'):
+    width = terminal_width()
+    border = '+' + ('-' * (width - 2)) + '+'
+    inner_width = width - 4
+    title_text = f' {title[:inner_width]} '
+
+    print(style(border, tone))
+    print(style(f'| {title_text.ljust(inner_width)} |', 'bold', tone))
+    print(style(border, tone))
+
+    for raw_line in lines:
+        for segment in wrap_text(raw_line, inner_width):
+            print(f'| {segment.ljust(inner_width)} |')
+
+    print(style(border, tone))
+
+
+def pause_for_continue():
+    prompt_input('\nPress Enter to return to the MAUS dashboard... ', 'bright_black')
 
 
 def default_stock_profiles():
@@ -341,23 +464,28 @@ def search_accounts(data, query):
 
 
 def pick_account(data, prompt_message, empty_message='No matching account found.'):
-    query = input(prompt_message).strip()
+    query = prompt_input(prompt_message).strip()
     matches = search_accounts(data, query)
     if not matches:
-        print(empty_message)
+        print_warning(empty_message)
         return None
 
     if len(matches) == 1:
         return matches[0]
 
-    print('\nMultiple matches found:')
+    lines = [
+        'Multiple matches found. Use the code of the account you want.',
+        '',
+    ]
     for account in matches:
-        print(f'- {format_account_brief(data, account)}')
+        lines.append(format_account_brief(data, account))
+
+    print_panel('Multiple Matches', lines, tone='bright_yellow')
 
     matching_codes = {account.get('code', '') for account in matches}
-    chosen_code = input('Enter the account code to continue: ').strip().upper()
+    chosen_code = prompt_input('Enter the account code to continue: ', 'bright_yellow', 'bold').strip().upper()
     if chosen_code not in matching_codes:
-        print('Invalid code.')
+        print_error('Invalid code.')
         return None
 
     return data['accounts'][chosen_code]
@@ -383,50 +511,97 @@ def get_store_value_summary(data):
     }
 
 
+def build_stock_overview_line(data):
+    segments = []
+    for stock_name in STOCK_CHOICES:
+        inventory_count = count_accounts_for_stock(data, stock_name)
+        metrics = get_stock_price_metrics(data, stock_name)
+        price_text = format_php(metrics['unit_price']) if metrics else 'no price'
+        segments.append(f'{stock_name} {inventory_count} @ {price_text}')
+    return ' | '.join(segments)
+
+
+def show_dashboard(data):
+    store_summary = get_store_value_summary(data)
+    lines = [
+        APP_OWNER,
+        APP_SUBTITLE,
+        '',
+        f'Inventory: {store_summary["inventory_count"]} account(s)',
+        f'Priced: {store_summary["priced_accounts"]} | Unpriced: {store_summary["unpriced_accounts"]}',
+        f'Estimated store value: {format_php(store_summary["inventory_value"])}',
+        '',
+        'Stock overview:',
+        build_stock_overview_line(data),
+    ]
+    print_panel(APP_TITLE, lines, tone='bright_cyan')
+
+
+def show_main_menu(data):
+    clear_screen()
+    show_dashboard(data)
+
+    menu_lines = []
+    for key, label, description in MENU_OPTIONS:
+        menu_lines.append(f'[{key}] {label}')
+        menu_lines.append(f'    {description}')
+        if key != MENU_OPTIONS[-1][0]:
+            menu_lines.append('')
+
+    print_panel('Main Menu', menu_lines, tone='bright_blue')
+
+
+def show_action_header(title, detail=''):
+    lines = [detail] if detail else ['']
+    print_panel(title, lines, tone='bright_magenta')
+
+
 def prompt_positive_float(message):
-    raw_value = input(message).strip()
+    raw_value = prompt_input(message).strip()
     try:
         value = parse_price_text(raw_value)
     except ValueError:
-        print('Please enter a valid price, for example 54, 54php, PHP 54, or 1,250.')
+        print_error('Please enter a valid price, for example 54, 54php, PHP 54, or 1,250.')
         return None
 
     if value <= 0:
-        print('Value must be greater than zero.')
+        print_error('Value must be greater than zero.')
         return None
 
     return round(value, 2)
 
 
 def prompt_positive_int(message):
-    raw_value = input(message).strip()
+    raw_value = prompt_input(message).strip()
     try:
         value = int(raw_value)
     except ValueError:
-        print('Please enter a whole number.')
+        print_error('Please enter a whole number.')
         return None
 
     if value <= 0:
-        print('Value must be greater than zero.')
+        print_error('Value must be greater than zero.')
         return None
 
     return value
 
 
 def prompt_stock_choice(message, allow_blank=False):
-    print(message)
+    lines = [message, '']
     for index, stock_name in enumerate(STOCK_CHOICES, start=1):
-        print(f'{index}) {stock_name}')
+        lines.append(f'[{index}] {stock_name}')
     if allow_blank:
-        print('0) Global fallback')
+        lines.append('[0] Global fallback')
 
-    raw_value = input('Choose stock number or name: ').strip().upper()
+    print_panel('Select Stock', lines, tone='bright_blue')
+
+    raw_value = prompt_input('Choose stock number or name: ').strip().upper()
     if allow_blank and raw_value in ('', '0'):
         return ''
 
     stock_name = parse_stock_choice(raw_value)
     if stock_name not in STOCK_CHOICES:
-        print(f'Invalid stock name. Use one of {", ".join(STOCK_CHOICES)}.')
+        print_error(f'Invalid stock name. Use one of {", ".join(STOCK_CHOICES)}.')
         return None
 
     return stock_name
@@ -436,16 +611,20 @@ def print_stock_snapshot(data, stock_name):
     info = get_stock_info(data, stock_name)
     metrics = get_stock_price_metrics(data, stock_name)
 
-    print(f'Stock chosen: {stock_name}')
+    lines = [f'Chosen stock: {stock_name}']
     if info:
-        print(f'Stock info: {info}')
+        lines.append(f'Info: {info}')
     else:
-        print(f'No saved info yet for {stock_name}. Use "Set stock info" to store details.')
+        lines.append(f'Info: No saved info yet for {stock_name}.')
 
     if metrics:
-        print(f'Auto price for {stock_name}: {format_php(metrics["unit_price"])} ({metrics["source"]})')
+        lines.append(f'Auto price: {format_php(metrics["unit_price"])}')
+        lines.append(f'Source: {metrics["source"]}')
     else:
-        print(f'No saved market price yet for {stock_name}. Add a market sample for this stock.')
+        lines.append('Auto price: No saved market price yet.')
+        lines.append('Source: Add a market sample for this stock or use global fallback.')
+
+    print_panel('Stock Snapshot', lines, tone='bright_green')
 
 
 def create_account_record(data, stock_name, account_name, link, email, password, fbfs, notes):
@@ -531,40 +710,49 @@ def add_row_account(data, stock_name, row):
         row['notes'],
     )
     if code is None:
-        print(record_or_error)
+        print_error(record_or_error)
         return None
 
     data['accounts'][code] = record_or_error
     metrics = get_stock_price_metrics(data, record_or_error['stock_name'])
-    print(f'Added {code}: {record_or_error["stock_name"]} | {record_or_error["name"]}')
+    print_success(f'Added {code}: {record_or_error["stock_name"]} | {record_or_error["name"]}')
     if metrics:
-        print(f'  auto price: {format_php(metrics["unit_price"])}')
+        print_info(f'Auto price: {format_php(metrics["unit_price"])}')
     return code
 
 
 def add_account(data):
+    show_action_header('Paste/Add Account(s)', 'Choose one stock, then paste one or many accounts into the batch.')
     stock_name = prompt_stock_choice('Choose stock name for the account(s):')
     if stock_name is None:
         return
 
     print_stock_snapshot(data, stock_name)
-    print('\nYou can paste accounts in either format:')
-    print('1) One row: name | link | email | password | fbfs | notes')
-    print('2) Six lines in this order:')
-    print('   name')
-    print('   link')
-    print('   email')
-    print('   password')
-    print('   fbfs')
-    print('   notes')
-    print('Use "-" for blank link or blank notes in multiline mode.')
-    print('Type DONE on its own line when finished.')
+    print_panel(
+        'Paste Guide',
+        [
+            'You can paste accounts in either format.',
+            '',
+            '1) One row: name | link | email | password | fbfs | notes',
+            '2) Six lines in this order:',
+            '   name',
+            '   link',
+            '   email',
+            '   password',
+            '   fbfs',
+            '   notes',
+            '',
+            'Use "-" for blank link or blank notes in multiline mode.',
+            'Type DONE on its own line when finished.',
+        ],
+        tone='bright_blue',
+    )
 
     added_codes = []
     multiline_buffer = []
 
     while True:
-        line = input('input> ')
+        line = prompt_input('input> ', 'bright_green', 'bold')
         stripped = line.strip()
 
         if stripped.upper() == 'DONE':
@@ -572,13 +760,13 @@ def add_account(data):
                 if len(multiline_buffer) == 6:
                     row, error = parse_multiline_account_block(multiline_buffer)
                     if error:
-                        print(error)
+                        print_error(error)
                     else:
                         code = add_row_account(data, stock_name, row)
                         if code:
                             added_codes.append(code)
                 else:
-                    print(
+                    print_warning(
                         f'Ignored incomplete multiline block with {len(multiline_buffer)} line(s). '
                         'Each account needs 6 lines.'
                     )
@@ -586,12 +774,12 @@ def add_account(data):
 
         if '|' in line:
             if multiline_buffer:
-                print('Finish the current multiline block first or type DONE.')
+                print_warning('Finish the current multiline block first or type DONE.')
                 continue
 
             row, error = parse_row_account_line(line)
             if error:
-                print(error)
+                print_error(error)
                 continue
 
             code = add_row_account(data, stock_name, row)
@@ -606,14 +794,14 @@ def add_account(data):
             if len(multiline_buffer) == 6:
                 row, error = parse_multiline_account_block(multiline_buffer)
                 if error:
-                    print(error)
+                    print_error(error)
                 else:
                     code = add_row_account(data, stock_name, row)
                     if code:
                         added_codes.append(code)
                 multiline_buffer = []
             else:
-                print(
+                print_warning(
                     f'Current multiline block has {len(multiline_buffer)} line(s). '
                     'Each account needs 6 lines.'
                 )
@@ -623,7 +811,7 @@ def add_account(data):
         if len(multiline_buffer) == 6:
             row, error = parse_multiline_account_block(multiline_buffer)
             if error:
-                print(error)
+                print_error(error)
             else:
                 code = add_row_account(data, stock_name, row)
                 if code:
@@ -631,20 +819,28 @@ def add_account(data):
             multiline_buffer = []
 
     if not added_codes:
-        print('No accounts added.')
+        print_warning('No accounts added.')
         return
 
     save_data(data)
-    print(f'Saved {len(added_codes)} account(s).')
+    print_panel(
+        'Batch Saved',
+        [
+            f'Saved {len(added_codes)} account(s).',
+            f'Codes: {", ".join(added_codes)}',
+        ],
+        tone='bright_green',
+    )
 
 
 def list_accounts(data):
+    show_action_header('Stored Accounts', 'Inventory view with MAUS pricing and quick account details.')
     accounts = data['accounts']
     if not accounts:
-        print('No accounts stored.')
+        print_warning('No accounts stored.')
         return
 
-    print('\nStored accounts:')
+    lines = []
     for key in sorted(accounts.keys()):
         account = accounts[key]
         stock_name = account.get('stock_name', '')
@@ -661,17 +857,36 @@ def list_accounts(data):
             line += f' -> {format_php(metrics["unit_price"])}'
         else:
             line += ' -> no price yet'
-        print(line)
+        lines.append(line)
+
+        detail_parts = []
+        if info:
+            detail_parts.append(f'info: {info}')
+        if account.get('email'):
+            detail_parts.append(f'email: {account["email"]}')
+        if detail_parts:
+            lines.append('  ' + ' | '.join(detail_parts))
+        lines.append('')
+
+    if lines and not lines[-1]:
+        lines.pop()
 
     store_summary = get_store_value_summary(data)
-    print('\nStore summary:')
-    print(f'- Accounts in inventory: {store_summary["inventory_count"]}')
-    print(f'- Accounts with price: {store_summary["priced_accounts"]}')
-    print(f'- Accounts without price: {store_summary["unpriced_accounts"]}')
-    print(f'- Estimated store value: {format_php(store_summary["inventory_value"])}')
+    print_panel('Inventory', lines, tone='bright_blue')
+    print_panel(
+        'Store Summary',
+        [
+            f'Accounts in inventory: {store_summary["inventory_count"]}',
+            f'Accounts with price: {store_summary["priced_accounts"]}',
+            f'Accounts without price: {store_summary["unpriced_accounts"]}',
+            f'Estimated store value: {format_php(store_summary["inventory_value"])}',
+        ],
+        tone='bright_green',
+    )
 
 
 def show_account(data):
+    show_action_header('View/Fetch Account', 'Search by account code, stock name, account name, or email.')
     account = pick_account(data, 'Enter account code or name to fetch: ')
     if not account:
         return
@@ -682,48 +897,64 @@ def show_account(data):
     password = account.get('password', '')
     legacy_password_hash = account.get('legacy_password_hash', '')
 
-    print(
-        f"\n{stock_name or 'UNKNOWN'}:"
-        f"\n  code: {account.get('code', 'no code')}"
-        f"\n  name: {account.get('name') or 'no name saved'}"
-        f"\n  link: {account.get('link') or 'no link saved'}"
-        f"\n  email: {account.get('email')}"
-        f"\n  stock_info: {info or 'no saved info'}"
-        f"\n  fbfs: {account.get('fbfs', 0)}"
-        f"\n  notes: {account.get('notes')}"
-    )
+    lines = [
+        f'Code: {account.get("code", "no code")}',
+        f'Stock: {stock_name or "UNKNOWN"}',
+        f'Name: {account.get("name") or "no name saved"}',
+        f'Link: {account.get("link") or "no link saved"}',
+        f'Email: {account.get("email")}',
+        f'Stock info: {info or "no saved info"}',
+        f'fbfs: {account.get("fbfs", 0)}',
+        f'Notes: {account.get("notes") or "no notes"}',
+    ]
     if password:
-        print(f'  password: {password}')
+        lines.append(f'Password: {password}')
     elif legacy_password_hash:
-        print(f'  legacy_password_hash: {legacy_password_hash}')
-        print('  password: old record still only has the previous hash')
+        lines.append(f'Legacy password hash: {legacy_password_hash}')
+        lines.append('Password: old record still only has the previous hash')
     else:
-        print('  password: not saved')
+        lines.append('Password: not saved')
 
     if metrics:
-        print(f'  estimated_price_php: {format_php(metrics["unit_price"])}')
-        print(f'  pricing_source: {metrics["source"]}')
+        lines.append(f'Estimated price: {format_php(metrics["unit_price"])}')
+        lines.append(f'Pricing source: {metrics["source"]}')
     else:
-        print('  estimated_price_php: no market data')
+        lines.append('Estimated price: no market data')
+
+    print_panel(f'Account {account.get("code", "NO-CODE")}', lines, tone='bright_green')
 
 
 def delete_account(data):
+    show_action_header('Delete Account', 'Search the account first, then confirm before removing it.')
     account = pick_account(data, 'Enter account code or name to delete: ')
     if not account:
         return
 
     code = account.get('code', '')
     stock_name = account.get('stock_name', 'UNKNOWN')
-    confirm = input(f'Confirm delete {code} ({stock_name})? (y/N): ').strip().lower()
+    name = account.get('name') or 'no name'
+
+    print_panel(
+        'Delete Preview',
+        [
+            f'Code: {code}',
+            f'Stock: {stock_name}',
+            f'Name: {name}',
+        ],
+        tone='bright_yellow',
+    )
+
+    confirm = prompt_input(f'Confirm delete {code} ({stock_name})? (y/N): ', 'bright_yellow', 'bold').strip().lower()
     if confirm == 'y':
         del data['accounts'][code]
         save_data(data)
-        print('Deleted.')
+        print_success('Deleted.')
     else:
-        print('Delete canceled.')
+        print_warning('Delete canceled.')
 
 
 def add_market_sample(data):
+    show_action_header('Add Market Price Sample', 'Feed a market listing so MAUS can auto-price your stored stock.')
     stock_name = prompt_stock_choice(
         'Choose stock name for this market listing:',
         allow_blank=True,
@@ -739,136 +970,155 @@ def add_market_sample(data):
     if account_count is None:
         return
 
-    note = input('Note/source (optional): ').strip()
+    note = prompt_input('Note/source (optional): ').strip()
     sample = {
         'total_price_php': total_price_php,
         'account_count': account_count,
         'note': note,
     }
 
+    unit_price = total_price_php / account_count
     if stock_name:
         data['stock_profiles'][stock_name]['samples'].append(sample)
         save_data(data)
 
-        unit_price = total_price_php / account_count
-        print(
-            f'Added {stock_name} market sample: {format_php(total_price_php)} for '
-            f'{account_count} account(s) -> {format_php(unit_price)} each'
-        )
-
         metrics = get_stock_price_metrics(data, stock_name)
+        lines = [
+            f'Added {stock_name} market sample.',
+            f'Listing price: {format_php(total_price_php)}',
+            f'Accounts in listing: {account_count}',
+            f'Unit price: {format_php(unit_price)}',
+        ]
         if metrics:
-            print(f'Updated auto price for {stock_name}: {format_php(metrics["unit_price"])}')
-            print(f'Estimated {stock_name} inventory value: {format_php(metrics["inventory_value"])}')
+            lines.append(f'Updated auto price: {format_php(metrics["unit_price"])}')
+            lines.append(f'Estimated {stock_name} inventory value: {format_php(metrics["inventory_value"])}')
+        print_panel('Sample Saved', lines, tone='bright_green')
     else:
         data['pricing']['samples'].append(sample)
         save_data(data)
 
-        unit_price = total_price_php / account_count
-        print(
-            f'Added global market sample: {format_php(total_price_php)} for '
-            f'{account_count} account(s) -> {format_php(unit_price)} each'
-        )
-
         metrics = get_global_price_metrics(data)
+        lines = [
+            'Added global market sample.',
+            f'Listing price: {format_php(total_price_php)}',
+            f'Accounts in listing: {account_count}',
+            f'Fallback unit price: {format_php(unit_price)}',
+        ]
         if metrics:
-            print(f'Updated global fallback price: {format_php(metrics["unit_price"])}')
+            lines.append(f'Updated global fallback price: {format_php(metrics["unit_price"])}')
+        print_panel('Global Sample Saved', lines, tone='bright_green')
 
 
 def set_stock_info(data):
+    show_action_header('Set Stock Info', 'Save a note or description for one stock choice.')
     stock_name = prompt_stock_choice('Choose a stock name to configure:')
     if stock_name is None:
         return
 
     current_info = get_stock_info(data, stock_name)
     if current_info:
-        print(f'Current info for {stock_name}: {current_info}')
+        print_info(f'Current info for {stock_name}: {current_info}')
     else:
-        print(f'No info saved yet for {stock_name}.')
+        print_warning(f'No info saved yet for {stock_name}.')
 
-    info = input(f'Info/description for {stock_name} (leave blank to clear): ').strip()
+    info = prompt_input(f'Info/description for {stock_name} (leave blank to clear): ').strip()
     data['stock_profiles'][stock_name]['info'] = info
     save_data(data)
 
     if info:
-        print(f'Saved info for {stock_name}.')
+        print_success(f'Saved info for {stock_name}.')
     else:
-        print(f'Cleared info for {stock_name}.')
+        print_warning(f'Cleared info for {stock_name}.')
 
     metrics = get_stock_price_metrics(data, stock_name)
     if metrics:
-        print(f'Current auto price for {stock_name}: {format_php(metrics["unit_price"])}')
+        print_info(f'Current auto price for {stock_name}: {format_php(metrics["unit_price"])}')
 
 
 def show_pricing_summary(data):
-    print('\nStock pricing summary:')
+    show_action_header('Pricing Summary', 'Review stock-by-stock price data, fallback pricing, and total store value.')
+
+    stock_lines = []
     for stock_name in STOCK_CHOICES:
         info = get_stock_info(data, stock_name) or 'no saved info'
         profile_samples = data['stock_profiles'][stock_name]['samples']
         metrics = get_stock_price_metrics(data, stock_name)
         inventory_count = count_accounts_for_stock(data, stock_name)
 
-        print(f'- {stock_name}: {info}')
-        print(f'  stored accounts: {inventory_count}')
-        print(f'  stock-specific market samples: {len(profile_samples)}')
+        stock_lines.append(f'{stock_name} | stored {inventory_count} | samples {len(profile_samples)}')
+        stock_lines.append(f'  info: {info}')
 
         if metrics:
-            print(f'  auto price: {format_php(metrics["unit_price"])}')
-            print(f'  pricing source: {metrics["source"]}')
-            print(f'  estimated stock inventory value: {format_php(metrics["inventory_value"])}')
+            stock_lines.append(f'  auto price: {format_php(metrics["unit_price"])}')
+            stock_lines.append(f'  source: {metrics["source"]}')
+            stock_lines.append(f'  estimated stock value: {format_php(metrics["inventory_value"])}')
         else:
-            print('  auto price: no market data')
+            stock_lines.append('  auto price: no market data')
+
+        stock_lines.append('')
+
+    if stock_lines and not stock_lines[-1]:
+        stock_lines.pop()
+
+    print_panel('Stock Pricing', stock_lines, tone='bright_blue')
 
     global_metrics = get_global_price_metrics(data)
-    print('\nGlobal fallback pricing:')
-    print(f'- global market samples: {len(data["pricing"]["samples"])}')
+    global_lines = [f'Global market samples: {len(data["pricing"]["samples"])}']
     if global_metrics:
-        print(f'- fallback unit price: {format_php(global_metrics["unit_price"])}')
+        global_lines.append(f'Fallback unit price: {format_php(global_metrics["unit_price"])}')
     else:
-        print('- fallback unit price: no global market data')
+        global_lines.append('Fallback unit price: no global market data')
+
+    print_panel('Global Fallback', global_lines, tone='bright_yellow')
 
     store_summary = get_store_value_summary(data)
-    print('\nStore totals:')
-    print(f'- Accounts in inventory: {store_summary["inventory_count"]}')
-    print(f'- Accounts with price: {store_summary["priced_accounts"]}')
-    print(f'- Accounts without price: {store_summary["unpriced_accounts"]}')
-    print(f'- Estimated store value: {format_php(store_summary["inventory_value"])}')
+    print_panel(
+        'Store Totals',
+        [
+            f'Accounts in inventory: {store_summary["inventory_count"]}',
+            f'Accounts with price: {store_summary["priced_accounts"]}',
+            f'Accounts without price: {store_summary["unpriced_accounts"]}',
+            f'Estimated store value: {format_php(store_summary["inventory_value"])}',
+        ],
+        tone='bright_green',
+    )
 
 
 def main():
     data = load_data()
 
     while True:
-        print('\nChoose an action:')
-        print('1) Paste/add account(s)')
-        print('2) List accounts')
-        print('3) View/fetch account')
-        print('4) Delete account')
-        print('5) Add market price sample')
-        print('6) Set stock info')
-        print('7) View pricing summary')
-        print('8) Exit')
-        choice = input('> ').strip()
+        show_main_menu(data)
+        choice = prompt_input('Select an action: ').strip()
+        clear_screen()
 
         if choice == '1':
             add_account(data)
+            pause_for_continue()
         elif choice == '2':
             list_accounts(data)
+            pause_for_continue()
         elif choice == '3':
             show_account(data)
+            pause_for_continue()
         elif choice == '4':
             delete_account(data)
+            pause_for_continue()
         elif choice == '5':
             add_market_sample(data)
+            pause_for_continue()
         elif choice == '6':
             set_stock_info(data)
+            pause_for_continue()
         elif choice == '7':
             show_pricing_summary(data)
+            pause_for_continue()
         elif choice == '8':
-            print('Bye')
+            print_panel('Exit', ['MAUS console closed.'], tone='bright_cyan')
             break
         else:
-            print('Invalid choice')
+            print_error('Invalid choice.')
+            pause_for_continue()
 
 
 if __name__ == '__main__':
