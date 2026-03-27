@@ -41,14 +41,17 @@ Menu options:
 - 1: Paste/add account(s)
 - 2: List accounts
 - 3: View/fetch account
-- 4: Mark account as sold
-- 5: View sold history
-- 6: Add market price sample
-- 7: Set stock info
-- 8: View market state
-- 9: View pricing summary
-- 10: Delete account
-- 11: Exit
+- 4: Edit account
+- 5: Mark account as sold
+- 6: View sold history
+- 7: Add market price sample
+- 8: Set stock info
+- 9: View market state
+- 10: View pricing summary
+- 11: Export backup
+- 12: Import backup
+- 13: Delete account
+- 14: Exit
 
 ## Stock Choices
 The stock name is now a picked choice instead of a separate free-text stock name plus tag.
@@ -144,8 +147,25 @@ Fetching an account shows:
 - notes
 - estimated price
 
+## Edit Active Accounts
+Choose `4) Edit account` to update an active stock account without deleting and re-adding it.
+
+You can update:
+- stock/category
+- name
+- link
+- email
+- password
+- fbfs
+- notes
+
+Editing tips:
+- press `Enter` to keep the current value
+- use `-` to clear `link` or `notes`
+- use `0` while choosing a new stock/category to cancel the edit
+
 ## Sold Tracking
-Choose `4) Mark account as sold` to move an active account out of inventory and into sold history.
+Choose `5) Mark account as sold` to move an active account out of inventory and into sold history.
 
 When you mark an account as sold, the app saves:
 - sold price
@@ -154,7 +174,7 @@ When you mark an account as sold, the app saves:
 - market price at the time of sale
 - difference between sold price and market price
 
-Choose `5) View sold history` to see:
+Choose `6) View sold history` to see:
 - what sold
 - when it sold
 - how much it sold for
@@ -179,7 +199,7 @@ The auto price is calculated like this:
 
 If a stock has no stock-specific market samples yet, the script can still use global market samples as a fallback.
 
-Choose `8) View market state` to see:
+Choose `9) View market state` to see:
 - latest observed market price per stock
 - price movement versus the previous sample
 - weighted market average
@@ -198,6 +218,30 @@ The price prompt accepts inputs like:
 This is useful for Git + Termux because:
 - you can `git pull` the latest script without losing your account data
 - your stock list is not mixed into your repo files
+
+## Move Data Between Phones
+Use these menu options for manual transfer:
+- `11) Export backup`
+- `12) Import backup`
+
+Default backup file:
+- `~/maus-account-backup.json`
+
+Import safety backup:
+- `~/.termux_accounts.pre_import_backup.json`
+
+Simple phone-to-phone flow:
+1. On phone A, choose `11) Export backup`.
+2. Move the backup file to phone B.
+3. On phone B, choose `12) Import backup`.
+
+If you want to export into shared storage on Android, you can usually use a path like:
+- `~/storage/downloads/maus-account-backup.json`
+
+That may require running:
+```bash
+termux-setup-storage
+```
 
 ## Note
 This version stores passwords as plain text so you can view them later in Termux.
