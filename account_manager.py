@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Termux account storage CLI with tag-based pricing."""
+"""Termux account storage CLI with stock-based pricing."""
 
-import getpass
 import json
 import os
 
 DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
-VALID_TAGS = ('RA', 'RP', 'MX', 'ON')
+STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP')
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
 
 
-def default_tag_profiles():
+def default_stock_profiles():
     return {
-        tag: {
+        stock_name: {
             'info': '',
             'samples': [],
         }
-        for tag in VALID_TAGS
+        for stock_name in STOCK_CHOICES
     }
 
 
@@ -27,7 +26,7 @@ def default_database():
         'pricing': {
             'samples': [],
         },
-        'tag_profiles': default_tag_profiles(),
+        'stock_profiles': default_stock_profiles(),
     }
 
 
@@ -57,6 +56,27 @@ def generate_unique_account_code(used_codes):
         next_number += 1
 
 
+def parse_stock_choice(raw_value):
+    normalized = str(raw_value).strip().upper()
+    choice_map = {str(index): stock_name for index, stock_name in enumerate(STOCK_CHOICES, start=1)}
+    return choice_map.get(normalized, normalized)
+
+
+def normalize_optional_text(value):
+    cleaned = str(value).strip()
+    if cleaned.upper() in ('-', 'NONE', 'N/A'):
+        return ''
+    return cleaned
+
+
+def normalize_non_negative_int(value, default=0):
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return default
+    return normalized if normalized >= 0 else default
+
+
 def normalize_accounts(accounts):
     if not isinstance(accounts, dict):
         return {}
@@ -65,38 +85,29 @@ def normalize_accounts(accounts):
     used_codes = set()
     pending_records = []
 
-    for name, info in accounts.items():
+    for key, info in accounts.items():
         if not isinstance(info, dict):
             continue
 
-        raw_key = str(name).strip()
-        password = str(info.get('password', '')).strip()
-        legacy_password_hash = str(
-            info.get('legacy_password_hash') or info.get('password_hash', '')
-        ).strip()
-        fbfs = info.get('fbfs', 0)
-        try:
-            fbfs = int(fbfs)
-        except (TypeError, ValueError):
-            fbfs = 0
-        if fbfs < 0:
-            fbfs = 0
-
-        stock_name = str(info.get('stock_name', '')).strip()
+        raw_key = str(key).strip()
+        stock_name = str(info.get('stock_name', '')).strip().upper()
+        if not stock_name:
+            stock_name = str(info.get('tag', '')).strip().upper()
         if not stock_name and raw_key and not looks_like_account_code(raw_key):
-            stock_name = raw_key
+            stock_name = raw_key.upper()
 
         record = {
             'code': str(info.get('code', '')).strip().upper(),
             'stock_name': stock_name,
             'name': str(info.get('name', '')).strip(),
-            'link': str(info.get('link', '')).strip(),
+            'link': normalize_optional_text(info.get('link', '')),
             'email': str(info.get('email', '')).strip(),
-            'password': password,
-            'legacy_password_hash': legacy_password_hash,
-            'tag': str(info.get('tag', '')).upper().strip(),
-            'notes': str(info.get('notes', '')).strip(),
-            'fbfs': fbfs,
+            'password': str(info.get('password', '')).strip(),
+            'legacy_password_hash': str(
+                info.get('legacy_password_hash') or info.get('password_hash', '')
+            ).strip(),
+            'notes': normalize_optional_text(info.get('notes', '')),
+            'fbfs': normalize_non_negative_int(info.get('fbfs', 0)),
         }
 
         if not record['code'] and looks_like_account_code(raw_key):
@@ -105,7 +116,7 @@ def normalize_accounts(accounts):
         if record['code'] and looks_like_account_code(record['code']) and record['code'] not in used_codes:
             used_codes.add(record['code'])
             if not record['stock_name']:
-                record['stock_name'] = record['name'] or record['code']
+                record['stock_name'] = 'UNKNOWN'
             normalized[record['code']] = record
         else:
             pending_records.append(record)
@@ -114,7 +125,7 @@ def normalize_accounts(accounts):
         code = generate_unique_account_code(used_codes)
         record['code'] = code
         if not record['stock_name']:
-            record['stock_name'] = record['name'] or code
+            record['stock_name'] = 'UNKNOWN'
         used_codes.add(code)
         normalized[code] = record
 
@@ -150,17 +161,17 @@ def normalize_samples(samples):
     return normalized
 
 
-def normalize_tag_profiles(raw_profiles):
-    profiles = default_tag_profiles()
+def normalize_stock_profiles(raw_profiles):
+    profiles = default_stock_profiles()
     if not isinstance(raw_profiles, dict):
         return profiles
 
-    for tag in VALID_TAGS:
-        raw_profile = raw_profiles.get(tag, {})
+    for stock_name in STOCK_CHOICES:
+        raw_profile = raw_profiles.get(stock_name, {})
         if not isinstance(raw_profile, dict):
             continue
 
-        profiles[tag] = {
+        profiles[stock_name] = {
             'info': str(raw_profile.get('info', '')).strip(),
             'samples': normalize_samples(raw_profile.get('samples', [])),
         }
@@ -173,17 +184,17 @@ def normalize_data(raw_data):
     if not isinstance(raw_data, dict):
         return database
 
-    if 'accounts' in raw_data or 'pricing' in raw_data or 'tag_profiles' in raw_data:
+    if 'accounts' in raw_data or 'pricing' in raw_data or 'stock_profiles' in raw_data or 'tag_profiles' in raw_data:
         database['accounts'] = normalize_accounts(raw_data.get('accounts', {}))
 
         pricing = raw_data.get('pricing', {})
         if isinstance(pricing, dict):
             database['pricing']['samples'] = normalize_samples(pricing.get('samples', []))
 
-        database['tag_profiles'] = normalize_tag_profiles(raw_data.get('tag_profiles', {}))
+        raw_profiles = raw_data.get('stock_profiles', raw_data.get('tag_profiles', {}))
+        database['stock_profiles'] = normalize_stock_profiles(raw_profiles)
         return database
 
-    # Backward compatibility for the original flat account-only JSON format.
     database['accounts'] = normalize_accounts(raw_data)
     return database
 
@@ -242,8 +253,8 @@ def build_price_metrics(samples, inventory_count):
     }
 
 
-def count_accounts_for_tag(data, tag):
-    return sum(1 for account in data['accounts'].values() if account.get('tag') == tag)
+def count_accounts_for_stock(data, stock_name):
+    return sum(1 for account in data['accounts'].values() if account.get('stock_name') == stock_name)
 
 
 def get_global_price_metrics(data, inventory_count=None):
@@ -256,25 +267,25 @@ def get_global_price_metrics(data, inventory_count=None):
     return metrics
 
 
-def get_tag_price_metrics(data, tag):
-    inventory_count = count_accounts_for_tag(data, tag)
-    profile = data['tag_profiles'].get(tag, {'info': '', 'samples': []})
+def get_stock_price_metrics(data, stock_name):
+    inventory_count = count_accounts_for_stock(data, stock_name)
+    profile = data['stock_profiles'].get(stock_name, {'info': '', 'samples': []})
 
     metrics = build_price_metrics(profile.get('samples', []), inventory_count)
     if metrics:
-        metrics['source'] = f'{tag} market samples'
+        metrics['source'] = f'{stock_name} market samples'
         return metrics
 
     metrics = get_global_price_metrics(data, inventory_count=inventory_count)
     if metrics:
-        metrics['source'] = f'global market samples fallback for {tag}'
+        metrics['source'] = f'global market samples fallback for {stock_name}'
         return metrics
 
     return None
 
 
-def get_tag_info(data, tag):
-    profile = data['tag_profiles'].get(tag, {})
+def get_stock_info(data, stock_name):
+    profile = data['stock_profiles'].get(stock_name, {})
     return str(profile.get('info', '')).strip()
 
 
@@ -283,16 +294,15 @@ def generate_next_account_code(data):
 
 
 def format_account_brief(data, account):
-    tag = account.get('tag', '')
-    metrics = get_tag_price_metrics(data, tag)
+    stock_name = account.get('stock_name', '')
+    metrics = get_stock_price_metrics(data, stock_name)
 
     parts = [
         account.get('code', 'NO-CODE'),
-        account.get('stock_name', 'Unnamed stock'),
+        stock_name or 'UNKNOWN',
     ]
     if account.get('name'):
         parts.append(account['name'])
-    parts.append(f'[{tag}]')
     parts.append(f'fbfs: {account.get("fbfs", 0)}')
     if metrics:
         parts.append(format_php(metrics['unit_price']))
@@ -357,13 +367,12 @@ def get_store_value_summary(data):
     total_value = 0.0
     priced_accounts = 0
 
-    for tag in VALID_TAGS:
-        metrics = get_tag_price_metrics(data, tag)
+    for account in data['accounts'].values():
+        metrics = get_stock_price_metrics(data, account.get('stock_name', ''))
         if not metrics:
             continue
-
-        total_value += metrics['inventory_value']
-        priced_accounts += metrics['inventory_count']
+        total_value += metrics['unit_price']
+        priced_accounts += 1
 
     inventory_count = len(data['accounts'])
     return {
@@ -404,106 +413,229 @@ def prompt_positive_int(message):
     return value
 
 
-def prompt_non_negative_int(message, default=0):
-    raw_value = input(message).strip()
-    if not raw_value:
-        return default
-
-    try:
-        value = int(raw_value)
-    except ValueError:
-        print('Please enter a whole number.')
-        return None
-
-    if value < 0:
-        print('Value cannot be negative.')
-        return None
-
-    return value
-
-
-def prompt_tag(message, allow_blank=False):
+def prompt_stock_choice(message, allow_blank=False):
     print(message)
-    for index, tag in enumerate(VALID_TAGS, start=1):
-        print(f'{index}) {tag}')
+    for index, stock_name in enumerate(STOCK_CHOICES, start=1):
+        print(f'{index}) {stock_name}')
     if allow_blank:
         print('0) Global fallback')
 
-    raw_value = input('Choose tag number or name: ').strip().upper()
+    raw_value = input('Choose stock number or name: ').strip().upper()
     if allow_blank and raw_value in ('', '0'):
         return ''
 
-    choice_map = {str(index): tag for index, tag in enumerate(VALID_TAGS, start=1)}
-    tag = choice_map.get(raw_value, raw_value)
-
-    if tag not in VALID_TAGS:
-        print(f'Invalid tag. Use one of {", ".join(VALID_TAGS)}.')
+    stock_name = parse_stock_choice(raw_value)
+    if stock_name not in STOCK_CHOICES:
+        print(f'Invalid stock name. Use one of {", ".join(STOCK_CHOICES)}.')
         return None
 
-    return tag
+    return stock_name
 
 
-def print_tag_snapshot(data, tag):
-    info = get_tag_info(data, tag)
-    metrics = get_tag_price_metrics(data, tag)
+def print_stock_snapshot(data, stock_name):
+    info = get_stock_info(data, stock_name)
+    metrics = get_stock_price_metrics(data, stock_name)
 
-    print(f'Tag selected: {tag}')
+    print(f'Stock chosen: {stock_name}')
     if info:
-        print(f'Tag info: {info}')
+        print(f'Stock info: {info}')
     else:
-        print(f'No saved info yet for {tag}. Use "Set tag info" to store details.')
+        print(f'No saved info yet for {stock_name}. Use "Set stock info" to store details.')
 
     if metrics:
-        print(f'Auto price for {tag}: {format_php(metrics["unit_price"])} ({metrics["source"]})')
+        print(f'Auto price for {stock_name}: {format_php(metrics["unit_price"])} ({metrics["source"]})')
     else:
-        print(f'No saved market price yet for {tag}. Add a market sample for this tag.')
+        print(f'No saved market price yet for {stock_name}. Add a market sample for this stock.')
+
+
+def create_account_record(data, stock_name, account_name, link, email, password, fbfs, notes):
+    stock_name = parse_stock_choice(stock_name)
+    account_name = str(account_name).strip()
+    link = normalize_optional_text(link)
+    email = str(email).strip()
+    password = str(password).strip()
+    notes = normalize_optional_text(notes)
+
+    if stock_name not in STOCK_CHOICES:
+        return None, f'Invalid stock name. Use one of {", ".join(STOCK_CHOICES)}.'
+
+    if not account_name:
+        return None, 'Account name cannot be empty.'
+
+    if not email or not password:
+        return None, 'Email and password cannot be empty.'
+
+    try:
+        fbfs_value = int(fbfs)
+    except (TypeError, ValueError):
+        return None, 'fbfs must be a whole number.'
+
+    if fbfs_value < 0:
+        return None, 'fbfs cannot be negative.'
+
+    code = generate_next_account_code(data)
+    return (
+        code,
+        {
+            'code': code,
+            'stock_name': stock_name,
+            'name': account_name,
+            'link': link,
+            'email': email,
+            'password': password,
+            'legacy_password_hash': '',
+            'notes': notes,
+            'fbfs': fbfs_value,
+        },
+    )
+
+
+def parse_row_account_line(line):
+    parts = [part.strip() for part in line.split('|')]
+    if len(parts) != 6:
+        return None, 'Use 6 fields: name | link | email | password | fbfs | notes'
+
+    return {
+        'name': parts[0],
+        'link': parts[1],
+        'email': parts[2],
+        'password': parts[3],
+        'fbfs': parts[4],
+        'notes': parts[5],
+    }, None
+
+
+def parse_multiline_account_block(lines):
+    if len(lines) != 6:
+        return None, 'A multiline account block needs exactly 6 lines.'
+
+    return {
+        'name': lines[0].strip(),
+        'link': lines[1].strip(),
+        'email': lines[2].strip(),
+        'password': lines[3].strip(),
+        'fbfs': lines[4].strip(),
+        'notes': lines[5].strip(),
+    }, None
+
+
+def add_row_account(data, stock_name, row):
+    code, record_or_error = create_account_record(
+        data,
+        stock_name,
+        row['name'],
+        row['link'],
+        row['email'],
+        row['password'],
+        row['fbfs'],
+        row['notes'],
+    )
+    if code is None:
+        print(record_or_error)
+        return None
+
+    data['accounts'][code] = record_or_error
+    metrics = get_stock_price_metrics(data, record_or_error['stock_name'])
+    print(f'Added {code}: {record_or_error["stock_name"]} | {record_or_error["name"]}')
+    if metrics:
+        print(f'  auto price: {format_php(metrics["unit_price"])}')
+    return code
 
 
 def add_account(data):
-    accounts = data['accounts']
-    stock_name = input('Stock/account name: ').strip()
-    account_name = input('Account name: ').strip()
-    link = input('Account link (optional): ').strip()
-    if not stock_name or not account_name:
-        print('Stock/account name and account name cannot be empty.')
+    stock_name = prompt_stock_choice('Choose stock name for the account(s):')
+    if stock_name is None:
         return
 
-    email = input('Email: ').strip()
-    password = getpass.getpass('Password: ').strip()
-    fbfs = prompt_non_negative_int('fbfs count (default 0): ')
-    if fbfs is None:
-        return
-    tag = prompt_tag('Choose a tag for this account:')
-    if tag is None:
+    print_stock_snapshot(data, stock_name)
+    print('\nYou can paste accounts in either format:')
+    print('1) One row: name | link | email | password | fbfs | notes')
+    print('2) Six lines in this order:')
+    print('   name')
+    print('   link')
+    print('   email')
+    print('   password')
+    print('   fbfs')
+    print('   notes')
+    print('Use "-" for blank link or blank notes in multiline mode.')
+    print('Type DONE on its own line when finished.')
+
+    added_codes = []
+    multiline_buffer = []
+
+    while True:
+        line = input('input> ')
+        stripped = line.strip()
+
+        if stripped.upper() == 'DONE':
+            if multiline_buffer:
+                if len(multiline_buffer) == 6:
+                    row, error = parse_multiline_account_block(multiline_buffer)
+                    if error:
+                        print(error)
+                    else:
+                        code = add_row_account(data, stock_name, row)
+                        if code:
+                            added_codes.append(code)
+                else:
+                    print(
+                        f'Ignored incomplete multiline block with {len(multiline_buffer)} line(s). '
+                        'Each account needs 6 lines.'
+                    )
+            break
+
+        if '|' in line:
+            if multiline_buffer:
+                print('Finish the current multiline block first or type DONE.')
+                continue
+
+            row, error = parse_row_account_line(line)
+            if error:
+                print(error)
+                continue
+
+            code = add_row_account(data, stock_name, row)
+            if code:
+                added_codes.append(code)
+            continue
+
+        if not stripped:
+            if not multiline_buffer:
+                continue
+
+            if len(multiline_buffer) == 6:
+                row, error = parse_multiline_account_block(multiline_buffer)
+                if error:
+                    print(error)
+                else:
+                    code = add_row_account(data, stock_name, row)
+                    if code:
+                        added_codes.append(code)
+                multiline_buffer = []
+            else:
+                print(
+                    f'Current multiline block has {len(multiline_buffer)} line(s). '
+                    'Each account needs 6 lines.'
+                )
+            continue
+
+        multiline_buffer.append(line)
+        if len(multiline_buffer) == 6:
+            row, error = parse_multiline_account_block(multiline_buffer)
+            if error:
+                print(error)
+            else:
+                code = add_row_account(data, stock_name, row)
+                if code:
+                    added_codes.append(code)
+            multiline_buffer = []
+
+    if not added_codes:
+        print('No accounts added.')
         return
 
-    print_tag_snapshot(data, tag)
-    notes = input('Notes (optional): ').strip()
-
-    if not email or not password:
-        print('Email and password cannot be empty.')
-        return
-
-    code = generate_next_account_code(data)
-    accounts[code] = {
-        'code': code,
-        'stock_name': stock_name,
-        'name': account_name,
-        'link': link,
-        'email': email,
-        'password': password,
-        'legacy_password_hash': '',
-        'tag': tag,
-        'notes': notes,
-        'fbfs': fbfs,
-    }
     save_data(data)
-    print(f'Added stock/account: {stock_name} ({tag})')
-    print(f'Account code: {code}')
-
-    metrics = get_tag_price_metrics(data, tag)
-    if metrics:
-        print(f'Estimated price for {code}: {format_php(metrics["unit_price"])}')
+    print(f'Saved {len(added_codes)} account(s).')
 
 
 def list_accounts(data):
@@ -515,14 +647,13 @@ def list_accounts(data):
     print('\nStored accounts:')
     for key in sorted(accounts.keys()):
         account = accounts[key]
-        tag = account.get('tag', '')
-        info = get_tag_info(data, tag)
-        metrics = get_tag_price_metrics(data, tag)
+        stock_name = account.get('stock_name', '')
+        info = get_stock_info(data, stock_name)
+        metrics = get_stock_price_metrics(data, stock_name)
 
-        line = f'- {account.get("code", key)} | {account.get("stock_name", "Unnamed stock")}'
+        line = f'- {account.get("code", key)} | {stock_name or "UNKNOWN"}'
         if account.get('name'):
             line += f' | name: {account["name"]}'
-        line += f' [{tag}]'
         if info:
             line += f' | {info}'
         line += f' | fbfs: {account.get("fbfs", 0)}'
@@ -545,20 +676,19 @@ def show_account(data):
     if not account:
         return
 
-    tag = account.get('tag', '')
-    info = get_tag_info(data, tag)
-    metrics = get_tag_price_metrics(data, tag)
+    stock_name = account.get('stock_name', '')
+    info = get_stock_info(data, stock_name)
+    metrics = get_stock_price_metrics(data, stock_name)
     password = account.get('password', '')
     legacy_password_hash = account.get('legacy_password_hash', '')
 
     print(
-        f"\n{account.get('stock_name', 'Unnamed stock')}:"
+        f"\n{stock_name or 'UNKNOWN'}:"
         f"\n  code: {account.get('code', 'no code')}"
         f"\n  name: {account.get('name') or 'no name saved'}"
         f"\n  link: {account.get('link') or 'no link saved'}"
         f"\n  email: {account.get('email')}"
-        f"\n  tag: {tag}"
-        f"\n  tag_info: {info or 'no saved info'}"
+        f"\n  stock_info: {info or 'no saved info'}"
         f"\n  fbfs: {account.get('fbfs', 0)}"
         f"\n  notes: {account.get('notes')}"
     )
@@ -583,7 +713,7 @@ def delete_account(data):
         return
 
     code = account.get('code', '')
-    stock_name = account.get('stock_name', 'Unnamed stock')
+    stock_name = account.get('stock_name', 'UNKNOWN')
     confirm = input(f'Confirm delete {code} ({stock_name})? (y/N): ').strip().lower()
     if confirm == 'y':
         del data['accounts'][code]
@@ -594,11 +724,11 @@ def delete_account(data):
 
 
 def add_market_sample(data):
-    tag = prompt_tag(
-        'Choose a tag for this market listing:',
+    stock_name = prompt_stock_choice(
+        'Choose stock name for this market listing:',
         allow_blank=True,
     )
-    if tag is None:
+    if stock_name is None:
         return
 
     total_price_php = prompt_positive_float('Observed market price in PHP: ')
@@ -616,20 +746,20 @@ def add_market_sample(data):
         'note': note,
     }
 
-    if tag:
-        data['tag_profiles'][tag]['samples'].append(sample)
+    if stock_name:
+        data['stock_profiles'][stock_name]['samples'].append(sample)
         save_data(data)
 
         unit_price = total_price_php / account_count
         print(
-            f'Added {tag} market sample: {format_php(total_price_php)} for '
+            f'Added {stock_name} market sample: {format_php(total_price_php)} for '
             f'{account_count} account(s) -> {format_php(unit_price)} each'
         )
 
-        metrics = get_tag_price_metrics(data, tag)
+        metrics = get_stock_price_metrics(data, stock_name)
         if metrics:
-            print(f'Updated auto price for {tag}: {format_php(metrics["unit_price"])}')
-            print(f'Estimated {tag} inventory value: {format_php(metrics["inventory_value"])}')
+            print(f'Updated auto price for {stock_name}: {format_php(metrics["unit_price"])}')
+            print(f'Estimated {stock_name} inventory value: {format_php(metrics["inventory_value"])}')
     else:
         data['pricing']['samples'].append(sample)
         save_data(data)
@@ -645,47 +775,47 @@ def add_market_sample(data):
             print(f'Updated global fallback price: {format_php(metrics["unit_price"])}')
 
 
-def set_tag_info(data):
-    tag = prompt_tag('Choose a tag to configure:')
-    if tag is None:
+def set_stock_info(data):
+    stock_name = prompt_stock_choice('Choose a stock name to configure:')
+    if stock_name is None:
         return
 
-    current_info = get_tag_info(data, tag)
+    current_info = get_stock_info(data, stock_name)
     if current_info:
-        print(f'Current info for {tag}: {current_info}')
+        print(f'Current info for {stock_name}: {current_info}')
     else:
-        print(f'No info saved yet for {tag}.')
+        print(f'No info saved yet for {stock_name}.')
 
-    info = input(f'Info/description for {tag} (leave blank to clear): ').strip()
-    data['tag_profiles'][tag]['info'] = info
+    info = input(f'Info/description for {stock_name} (leave blank to clear): ').strip()
+    data['stock_profiles'][stock_name]['info'] = info
     save_data(data)
 
     if info:
-        print(f'Saved info for {tag}.')
+        print(f'Saved info for {stock_name}.')
     else:
-        print(f'Cleared info for {tag}.')
+        print(f'Cleared info for {stock_name}.')
 
-    metrics = get_tag_price_metrics(data, tag)
+    metrics = get_stock_price_metrics(data, stock_name)
     if metrics:
-        print(f'Current auto price for {tag}: {format_php(metrics["unit_price"])}')
+        print(f'Current auto price for {stock_name}: {format_php(metrics["unit_price"])}')
 
 
 def show_pricing_summary(data):
-    print('\nTag pricing summary:')
-    for tag in VALID_TAGS:
-        info = get_tag_info(data, tag) or 'no saved info'
-        profile_samples = data['tag_profiles'][tag]['samples']
-        metrics = get_tag_price_metrics(data, tag)
-        inventory_count = count_accounts_for_tag(data, tag)
+    print('\nStock pricing summary:')
+    for stock_name in STOCK_CHOICES:
+        info = get_stock_info(data, stock_name) or 'no saved info'
+        profile_samples = data['stock_profiles'][stock_name]['samples']
+        metrics = get_stock_price_metrics(data, stock_name)
+        inventory_count = count_accounts_for_stock(data, stock_name)
 
-        print(f'- {tag}: {info}')
+        print(f'- {stock_name}: {info}')
         print(f'  stored accounts: {inventory_count}')
-        print(f'  tag-specific market samples: {len(profile_samples)}')
+        print(f'  stock-specific market samples: {len(profile_samples)}')
 
         if metrics:
             print(f'  auto price: {format_php(metrics["unit_price"])}')
             print(f'  pricing source: {metrics["source"]}')
-            print(f'  estimated tag inventory value: {format_php(metrics["inventory_value"])}')
+            print(f'  estimated stock inventory value: {format_php(metrics["inventory_value"])}')
         else:
             print('  auto price: no market data')
 
@@ -710,12 +840,12 @@ def main():
 
     while True:
         print('\nChoose an action:')
-        print('1) Add stock/account')
+        print('1) Paste/add account(s)')
         print('2) List accounts')
         print('3) View/fetch account')
         print('4) Delete account')
         print('5) Add market price sample')
-        print('6) Set tag info')
+        print('6) Set stock info')
         print('7) View pricing summary')
         print('8) Exit')
         choice = input('> ').strip()
@@ -731,7 +861,7 @@ def main():
         elif choice == '5':
             add_market_sample(data)
         elif choice == '6':
-            set_tag_info(data)
+            set_stock_info(data)
         elif choice == '7':
             show_pricing_summary(data)
         elif choice == '8':

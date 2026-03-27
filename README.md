@@ -8,16 +8,12 @@
 1. Clone your Git repo in Termux:
    ```bash
    cd $HOME
-   git clone <your-repo-url> Account
+   git clone https://github.com/rakiroo/Account-Tracker.git Account
    cd Account
    ```
-2. Make executable:
+2. Run it:
    ```bash
-   chmod +x account_manager.py
-   ```
-3. Run it:
-   ```bash
-   ./account_manager.py
+   python account_manager.py
    ```
 
 ## Update From Git
@@ -25,6 +21,7 @@ When you change the script on your computer and push it to Git, update it on you
 ```bash
 cd $HOME/Account
 git pull
+python account_manager.py
 ```
 
 Your saved accounts and pricing data stay safe because they are stored outside the repo in:
@@ -32,93 +29,123 @@ Your saved accounts and pricing data stay safe because they are stored outside t
 
 ## Usage
 ```bash
-./account_manager.py
+python account_manager.py
 ```
 
 Menu options:
-- 1: Add account
+- 1: Paste/add account(s)
 - 2: List accounts
 - 3: View/fetch account
 - 4: Delete account
 - 5: Add market price sample
-- 6: Set tag info
+- 6: Set stock info
 - 7: View pricing summary
 - 8: Exit
 
-## Tag-Based Info And Pricing
-Each tag like `RA`, `RP`, `MX`, and `ON` can now have:
-- its own saved info/description
-- its own market pricing samples
-- its own auto-calculated price
+## Stock Choices
+The stock name is now a picked choice instead of a separate free-text stock name plus tag.
 
-When you add or view an account, the script will show:
-- the tag info for that account
-- the estimated price for that tag
+Current stock choices:
+- `RA`
+- `PR`
+- `ON`
+- `MN`
+- `RP`
+
+When adding accounts, you choose one stock name first, then paste the account info for that stock.
 
 ## Account Fields
-Each account now stores:
+Each account stores:
 - code
-- stock/account name
+- stock name
 - name
 - link
 - email
 - password
-- tag
 - fbfs
 - notes
 
-When adding an account, the script:
-- generates an account code automatically
-- asks for the account `name`
-- asks for the account `link`
-- asks for the `fbfs` count
+Every account also gets an auto code like:
+- `ACC-0001`
+- `ACC-0002`
 
-When you fetch an account, it shows the saved:
-- code
-- stock/account name
-- name
-- link
-- email
-- password
-- fbfs
-- price
+## Bulk Add
+Choose `1) Paste/add account(s)`, then pick the stock name first.
+
+After that, you can paste accounts in either format.
+
+### Format 1: One Line Per Account
+```text
+name | link | email | password | fbfs | notes
+```
+
+Example:
+```text
+John Doe | https://example.com/john | john@example.com | pass123 | 120 | main stock
+Jane Doe |  | jane@example.com | pass456 | 80 |
+```
+
+### Format 2: One Field Per Line
+Each account uses 6 lines in this order:
+1. `name`
+2. `link`
+3. `email`
+4. `password`
+5. `fbfs`
+6. `notes`
+
+Example:
+```text
+John Doe
+https://example.com/john
+john@example.com
+pass123
+120
+main stock
+
+Jane Doe
+-
+jane@example.com
+pass456
+80
+-
+```
+
+Notes:
+- Use `-` for blank `link` or blank `notes` in multiline mode.
+- Type `DONE` on its own line when finished.
 
 ## Fetching Stock
 You can fetch or delete an account by:
 - account code
-- stock/account name
+- stock name
 - saved account name
 
-The best way is by account code because every account gets its own auto code, for example:
-- `ACC-0001`
-- `ACC-0002`
+Fetching an account shows:
+- code
+- stock name
+- name
+- link
+- email
+- password
+- fbfs
+- notes
+- estimated price
 
-## Suggested Setup
-1. Choose `6) Set tag info`.
-2. Save a description for each tag you use.
-   - Example: `RA = ready account`
-   - Example: `RP = ready profile`
-3. Choose `5) Add market price sample`.
-4. Pick the tag choice for the listing, then enter the price and quantity.
-   - Example: `RA`
-   - Example: `54 PHP` for `1` account
-   - Example: `RP`
-   - Example: `250 PHP` for `5` accounts
-5. Add your accounts normally and pick the correct tag from the choices.
-6. The script will automatically show the saved tag info and the estimated tag price.
+## Pricing
+Pricing is now tied to the picked stock name choices:
+- `RA`
+- `PR`
+- `ON`
+- `MN`
+- `RP`
 
-## Pricing Rules
-The script calculates price per tag using:
-- `sum of prices for that tag / sum of account counts for that tag`
+You can save stock info and market samples per stock name.
 
-Example for `RA`:
-- `54 PHP` for `1` account
-- `200 PHP` for `4` accounts
+The auto price is calculated like this:
+- `sum of prices for that stock / sum of account counts for that stock`
 
-Auto price for `RA`:
-- `(54 + 200) / (1 + 4) = 50.80 PHP per RA account`
-
-If a tag has no tag-specific market samples yet, the script can still use global market samples as a fallback.
+If a stock has no stock-specific market samples yet, the script can still use global market samples as a fallback.
 
 ## Price Input Formats
 The price prompt accepts inputs like:
