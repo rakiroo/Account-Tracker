@@ -27,6 +27,51 @@ python account_manager.py
 Your saved accounts and pricing data stay safe because they are stored outside the repo in:
 - `~/.termux_accounts.json`
 
+## Telegram Bot
+This branch also includes a Telegram bot in:
+- `telegram_bot.py`
+
+Why it helps:
+- one running bot can be used from multiple phones
+- the bot reads and writes the same MAUS data file
+- you can fetch accounts or update `fbfs` without opening the CLI
+
+Install bot dependency:
+```bash
+pip install -r requirements.txt
+```
+
+Required environment variables:
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOWED_USER_IDS`
+
+Example on Windows PowerShell:
+```powershell
+$env:TELEGRAM_BOT_TOKEN='your-bot-token'
+$env:TELEGRAM_ALLOWED_USER_IDS='123456789'
+python telegram_bot.py
+```
+
+Example on Linux, macOS, or Termux:
+```bash
+export TELEGRAM_BOT_TOKEN='your-bot-token'
+export TELEGRAM_ALLOWED_USER_IDS='123456789'
+python3 telegram_bot.py
+```
+
+Tip:
+- Use a bot like `@userinfobot` in Telegram to get your numeric user ID.
+- Keep the allowed-user list private because this bot can show passwords and account data.
+
+Available Telegram commands:
+- `/stats`
+- `/list [stock]`
+- `/find <code or name>`
+- `/market [stock|global]`
+- `/sold [limit]`
+- `/setfbfs <code> <number>`
+- `/sell <code> <price> [note]`
+
 ## Usage
 ```bash
 python account_manager.py

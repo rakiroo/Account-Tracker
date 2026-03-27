@@ -665,6 +665,90 @@ def format_account_brief(data, account):
     return ' | '.join(parts)
 
 
+def build_account_detail_lines(data, account):
+    stock_name = account.get('stock_name', '')
+    info = get_stock_info(data, stock_name)
+    metrics = get_stock_price_metrics(data, stock_name)
+    password = account.get('password', '')
+    legacy_password_hash = account.get('legacy_password_hash', '')
+
+    lines = [
+        f'Code: {account.get("code", "no code")}',
+        f'Stock: {stock_name or "UNKNOWN"}',
+        f'Name: {account.get("name") or "no name saved"}',
+        f'Link: {account.get("link") or "no link saved"}',
+        f'Email: {account.get("email")}',
+        f'Stock info: {info or "no saved info"}',
+        f'fbfs: {account.get("fbfs", 0)}',
+        f'Notes: {account.get("notes") or "no notes"}',
+    ]
+    if password:
+        lines.append(f'Password: {password}')
+    elif legacy_password_hash:
+        lines.append(f'Legacy password hash: {legacy_password_hash}')
+        lines.append('Password: old record still only has the previous hash')
+    else:
+        lines.append('Password: not saved')
+
+    if metrics:
+        lines.append(f'Estimated price: {format_php(metrics["unit_price"])}')
+        lines.append(f'Pricing source: {metrics["source"]}')
+    else:
+        lines.append('Estimated price: no market data')
+
+    return lines
+
+
+def update_account_fields(account, field_updates):
+    changes = []
+    for field_name, updated_value in field_updates.items():
+        if account.get(field_name) != updated_value:
+            account[field_name] = updated_value
+            changes.append(field_name)
+
+    if 'password' in changes and account.get('password'):
+        account['legacy_password_hash'] = ''
+
+    return changes
+
+
+def sell_account_record(data, account, sold_price_php, sold_at='', sold_note=''):
+    stock_name = account.get('stock_name', '')
+    metrics = get_stock_price_metrics(data, stock_name)
+    market_price_php = metrics['unit_price'] if metrics else 0.0
+    pricing_source = metrics['source'] if metrics else 'no market data'
+
+    sold_at = str(sold_at).strip() or current_timestamp_text()
+    sold_note = str(sold_note).strip()
+    sold_price_php = round(float(sold_price_php), 2)
+
+    price_difference_php = sold_price_php - market_price_php if market_price_php > 0 else 0.0
+    price_difference_percent = 0.0
+    if market_price_php > 0:
+        price_difference_percent = (price_difference_php / market_price_php) * 100
+
+    sold_record = dict(account)
+    sold_record.update(
+        {
+            'sold_price_php': sold_price_php,
+            'sold_at': sold_at,
+            'sold_note': sold_note,
+            'market_price_php': round(market_price_php, 2) if market_price_php > 0 else 0.0,
+            'price_difference_php': round(price_difference_php, 2),
+            'price_difference_percent': round(price_difference_percent, 2),
+            'pricing_source': pricing_source,
+        }
+    )
+
+    code = account.get('code', '')
+    data.setdefault('sold_accounts', {})
+    data['sold_accounts'][code] = sold_record
+    if code in data['accounts']:
+        del data['accounts'][code]
+
+    return sold_record
+
+
 def search_accounts(data, query):
     cleaned_query = query.strip()
     if not cleaned_query:
@@ -1194,36 +1278,7 @@ def show_account(data):
     if not account:
         return
 
-    stock_name = account.get('stock_name', '')
-    info = get_stock_info(data, stock_name)
-    metrics = get_stock_price_metrics(data, stock_name)
-    password = account.get('password', '')
-    legacy_password_hash = account.get('legacy_password_hash', '')
-
-    lines = [
-        f'Code: {account.get("code", "no code")}',
-        f'Stock: {stock_name or "UNKNOWN"}',
-        f'Name: {account.get("name") or "no name saved"}',
-        f'Link: {account.get("link") or "no link saved"}',
-        f'Email: {account.get("email")}',
-        f'Stock info: {info or "no saved info"}',
-        f'fbfs: {account.get("fbfs", 0)}',
-        f'Notes: {account.get("notes") or "no notes"}',
-    ]
-    if password:
-        lines.append(f'Password: {password}')
-    elif legacy_password_hash:
-        lines.append(f'Legacy password hash: {legacy_password_hash}')
-        lines.append('Password: old record still only has the previous hash')
-    else:
-        lines.append('Password: not saved')
-
-    if metrics:
-        lines.append(f'Estimated price: {format_php(metrics["unit_price"])}')
-        lines.append(f'Pricing source: {metrics["source"]}')
-    else:
-        lines.append('Estimated price: no market data')
-
+    lines = build_account_detail_lines(data, account)
     print_panel(f'Account {account.get("code", "NO-CODE")}', lines, tone='bright_green')
 
 
@@ -1265,7 +1320,6 @@ def edit_account(data):
     updated_fbfs = prompt_edit_fbfs(account.get('fbfs', 0))
     updated_notes = prompt_edit_text('Notes', account.get('notes', ''), allow_clear=True)
 
-    changes = []
     field_updates = {
         'stock_name': updated_stock_name,
         'name': updated_name,
@@ -1276,14 +1330,7 @@ def edit_account(data):
         'notes': normalize_optional_text(updated_notes),
     }
 
-    for field_name, updated_value in field_updates.items():
-        if account.get(field_name) != updated_value:
-            account[field_name] = updated_value
-            changes.append(field_name)
-
-    if 'password' in changes and updated_password:
-        account['legacy_password_hash'] = ''
-
+    changes = update_account_fields(account, field_updates)
     if not changes:
         print_warning('No changes saved.')
         return
@@ -1338,32 +1385,17 @@ def mark_account_sold(data):
     )
     sold_note = prompt_input('Sale note (optional): ').strip()
 
-    price_difference_php = sold_price_php - market_price_php if market_price_php > 0 else 0.0
-    price_difference_percent = 0.0
-    if market_price_php > 0:
-        price_difference_percent = (price_difference_php / market_price_php) * 100
-
-    sold_record = dict(account)
-    sold_record.update(
-        {
-            'sold_price_php': round(sold_price_php, 2),
-            'sold_at': sold_at,
-            'sold_note': sold_note,
-            'market_price_php': round(market_price_php, 2) if market_price_php > 0 else 0.0,
-            'price_difference_php': round(price_difference_php, 2),
-            'price_difference_percent': round(price_difference_percent, 2),
-            'pricing_source': pricing_source,
-        }
+    sold_record = sell_account_record(
+        data,
+        account,
+        sold_price_php=sold_price_php,
+        sold_at=sold_at,
+        sold_note=sold_note,
     )
-
-    code = account.get('code', '')
-    data.setdefault('sold_accounts', {})
-    data['sold_accounts'][code] = sold_record
-    del data['accounts'][code]
     save_data(data)
 
     result_lines = [
-        f'Sold {code} for {format_php(sold_price_php)}.',
+        f'Sold {sold_record.get("code", "no code")} for {format_php(sold_price_php)}.',
         f'Sold at: {sold_at}',
     ]
     if sold_note:
