@@ -6,11 +6,13 @@ import os
 import shutil
 import sys
 import textwrap
+from datetime import datetime
 
 DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
 STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP')
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
+BACK_ACTION = '__BACK__'
 APP_TITLE = 'MAUS ACCOUNT TRACKER'
 APP_SUBTITLE = 'Phone-ready stock console'
 APP_OWNER = 'Owner codename: MAUS'
@@ -18,11 +20,14 @@ MENU_OPTIONS = (
     ('1', 'Paste/add account(s)', 'Bulk add one stock batch at a time'),
     ('2', 'List accounts', 'See every stored account and store value'),
     ('3', 'View/fetch account', 'Open full details by code or name'),
-    ('4', 'Delete account', 'Remove a stock entry safely'),
-    ('5', 'Add market price sample', 'Feed auto-pricing with market data'),
-    ('6', 'Set stock info', 'Save notes for RA, PR, ON, MN, or RP'),
-    ('7', 'View pricing summary', 'Review prices, samples, and totals'),
-    ('8', 'Exit', 'Close the MAUS console'),
+    ('4', 'Mark account as sold', 'Move stock out of inventory and log the sale'),
+    ('5', 'View sold history', 'Check sold price, market comparison, and date'),
+    ('6', 'Add market price sample', 'Feed auto-pricing with market data'),
+    ('7', 'Set stock info', 'Save notes for RA, PR, ON, MN, or RP'),
+    ('8', 'View market state', 'See the latest market condition per stock'),
+    ('9', 'View pricing summary', 'Review prices, samples, and totals'),
+    ('10', 'Delete account', 'Remove a stock entry safely'),
+    ('11', 'Exit', 'Close the MAUS console'),
 )
 ANSI_CODES = {
     'reset': '\033[0m',
@@ -146,6 +151,7 @@ def default_stock_profiles():
 def default_database():
     return {
         'accounts': {},
+        'sold_accounts': {},
         'pricing': {
             'samples': [],
         },
@@ -198,6 +204,29 @@ def normalize_non_negative_int(value, default=0):
     except (TypeError, ValueError):
         return default
     return normalized if normalized >= 0 else default
+
+
+def normalize_non_negative_float(value, default=0.0):
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return default
+    return normalized if normalized >= 0 else default
+
+
+def normalize_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def current_timestamp_text():
+    return datetime.now().strftime('%Y-%m-%d %H:%M')
+
+
+def current_date_text():
+    return datetime.now().strftime('%Y-%m-%d')
 
 
 def normalize_accounts(accounts):
@@ -278,8 +307,86 @@ def normalize_samples(samples):
                 'total_price_php': round(total_price_php, 2),
                 'account_count': account_count,
                 'note': str(sample.get('note', '')).strip(),
+                'recorded_at': str(
+                    sample.get('recorded_at') or sample.get('created_at') or ''
+                ).strip(),
             }
         )
+
+    return normalized
+
+
+def normalize_sold_accounts(raw_sold_accounts):
+    if not isinstance(raw_sold_accounts, dict):
+        return {}
+
+    normalized = {}
+    used_codes = set()
+    pending_records = []
+
+    for key, info in raw_sold_accounts.items():
+        if not isinstance(info, dict):
+            continue
+
+        raw_key = str(key).strip()
+        stock_name = str(info.get('stock_name', '')).strip().upper()
+        if not stock_name:
+            stock_name = str(info.get('tag', '')).strip().upper()
+        if not stock_name and raw_key and not looks_like_account_code(raw_key):
+            stock_name = raw_key.upper()
+
+        market_price_php = normalize_non_negative_float(info.get('market_price_php'))
+        sold_price_php = normalize_non_negative_float(info.get('sold_price_php'))
+        difference_php = sold_price_php - market_price_php if market_price_php > 0 else 0.0
+        difference_percent = 0.0
+        if market_price_php > 0:
+            difference_percent = (difference_php / market_price_php) * 100
+
+        record = {
+            'code': str(info.get('code', '')).strip().upper(),
+            'stock_name': stock_name,
+            'name': str(info.get('name', '')).strip(),
+            'link': normalize_optional_text(info.get('link', '')),
+            'email': str(info.get('email', '')).strip(),
+            'password': str(info.get('password', '')).strip(),
+            'legacy_password_hash': str(
+                info.get('legacy_password_hash') or info.get('password_hash', '')
+            ).strip(),
+            'notes': normalize_optional_text(info.get('notes', '')),
+            'fbfs': normalize_non_negative_int(info.get('fbfs', 0)),
+            'sold_price_php': round(sold_price_php, 2),
+            'sold_at': str(info.get('sold_at', '')).strip(),
+            'sold_note': normalize_optional_text(info.get('sold_note', info.get('sale_note', ''))),
+            'market_price_php': round(market_price_php, 2) if market_price_php > 0 else 0.0,
+            'price_difference_php': round(
+                normalize_float(info.get('price_difference_php', difference_php), difference_php),
+                2,
+            ),
+            'price_difference_percent': round(
+                normalize_float(info.get('price_difference_percent', difference_percent), difference_percent),
+                2,
+            ),
+            'pricing_source': str(info.get('pricing_source', '')).strip(),
+        }
+
+        if not record['code'] and looks_like_account_code(raw_key):
+            record['code'] = raw_key.upper()
+
+        if record['code'] and looks_like_account_code(record['code']) and record['code'] not in used_codes:
+            used_codes.add(record['code'])
+            if not record['stock_name']:
+                record['stock_name'] = 'UNKNOWN'
+            normalized[record['code']] = record
+        else:
+            pending_records.append(record)
+
+    for record in pending_records:
+        code = generate_unique_account_code(used_codes)
+        record['code'] = code
+        if not record['stock_name']:
+            record['stock_name'] = 'UNKNOWN'
+        used_codes.add(code)
+        normalized[code] = record
 
     return normalized
 
@@ -309,6 +416,7 @@ def normalize_data(raw_data):
 
     if 'accounts' in raw_data or 'pricing' in raw_data or 'stock_profiles' in raw_data or 'tag_profiles' in raw_data:
         database['accounts'] = normalize_accounts(raw_data.get('accounts', {}))
+        database['sold_accounts'] = normalize_sold_accounts(raw_data.get('sold_accounts', {}))
 
         pricing = raw_data.get('pricing', {})
         if isinstance(pricing, dict):
@@ -412,8 +520,112 @@ def get_stock_info(data, stock_name):
     return str(profile.get('info', '')).strip()
 
 
+def get_all_account_codes(data):
+    codes = set(data['accounts'].keys())
+    codes.update(data.get('sold_accounts', {}).keys())
+    return codes
+
+
 def generate_next_account_code(data):
-    return generate_unique_account_code(set(data['accounts'].keys()))
+    return generate_unique_account_code(get_all_account_codes(data))
+
+
+def count_sold_accounts_for_stock(data, stock_name):
+    return sum(1 for account in data.get('sold_accounts', {}).values() if account.get('stock_name') == stock_name)
+
+
+def get_sales_summary(data):
+    sold_accounts = list(data.get('sold_accounts', {}).values())
+    sold_count = len(sold_accounts)
+    total_sales_value = sum(account.get('sold_price_php', 0.0) for account in sold_accounts)
+
+    sold_with_market = [account for account in sold_accounts if account.get('market_price_php', 0.0) > 0]
+    total_market_reference = sum(account.get('market_price_php', 0.0) for account in sold_with_market)
+    total_difference = sum(account.get('price_difference_php', 0.0) for account in sold_with_market)
+
+    return {
+        'sold_count': sold_count,
+        'total_sales_value': total_sales_value,
+        'market_compared_count': len(sold_with_market),
+        'total_market_reference': total_market_reference,
+        'total_difference': total_difference,
+    }
+
+
+def format_signed_php(amount):
+    sign = '+' if amount >= 0 else '-'
+    return f'{sign}{format_php(abs(amount))}'
+
+
+def format_signed_percent(amount):
+    sign = '+' if amount >= 0 else '-'
+    return f'{sign}{abs(amount):.2f}%'
+
+
+def get_sample_unit_price(sample):
+    account_count = sample.get('account_count', 0)
+    if account_count <= 0:
+        return 0.0
+    return sample.get('total_price_php', 0.0) / account_count
+
+
+def get_market_state(samples):
+    if not samples:
+        return None
+
+    metrics = build_price_metrics(samples, inventory_count=0)
+    latest_sample = samples[-1]
+    latest_unit_price = get_sample_unit_price(latest_sample)
+
+    previous_unit_price = None
+    movement_php = None
+    direction = 'steady'
+    if len(samples) >= 2:
+        previous_unit_price = get_sample_unit_price(samples[-2])
+        movement_php = latest_unit_price - previous_unit_price
+        if movement_php > 0:
+            direction = 'up'
+        elif movement_php < 0:
+            direction = 'down'
+
+    unit_prices = [get_sample_unit_price(sample) for sample in samples]
+    return {
+        'sample_count': len(samples),
+        'weighted_unit_price': metrics['unit_price'] if metrics else 0.0,
+        'latest_unit_price': latest_unit_price,
+        'latest_total_price': latest_sample.get('total_price_php', 0.0),
+        'latest_account_count': latest_sample.get('account_count', 0),
+        'latest_note': latest_sample.get('note', ''),
+        'latest_recorded_at': latest_sample.get('recorded_at', ''),
+        'previous_unit_price': previous_unit_price,
+        'movement_php': movement_php,
+        'direction': direction,
+        'highest_unit_price': max(unit_prices),
+        'lowest_unit_price': min(unit_prices),
+    }
+
+
+def get_stock_market_state(data, stock_name):
+    profile = data['stock_profiles'].get(stock_name, {'samples': []})
+    return get_market_state(profile.get('samples', []))
+
+
+def get_global_market_state(data):
+    return get_market_state(data['pricing']['samples'])
+
+
+def describe_sale_vs_market(sold_record):
+    market_price = sold_record.get('market_price_php', 0.0)
+    if market_price <= 0:
+        return 'No market comparison saved.'
+
+    difference_php = sold_record.get('price_difference_php', 0.0)
+    difference_percent = sold_record.get('price_difference_percent', 0.0)
+    if difference_php > 0:
+        return f'Above market by {format_signed_php(difference_php)} ({format_signed_percent(difference_percent)})'
+    if difference_php < 0:
+        return f'Below market by {format_php(abs(difference_php))} ({format_signed_percent(difference_percent)})'
+    return 'Matched market price.'
 
 
 def format_account_brief(data, account):
@@ -515,14 +727,16 @@ def build_stock_overview_line(data):
     segments = []
     for stock_name in STOCK_CHOICES:
         inventory_count = count_accounts_for_stock(data, stock_name)
+        sold_count = count_sold_accounts_for_stock(data, stock_name)
         metrics = get_stock_price_metrics(data, stock_name)
         price_text = format_php(metrics['unit_price']) if metrics else 'no price'
-        segments.append(f'{stock_name} {inventory_count} @ {price_text}')
+        segments.append(f'{stock_name} in {inventory_count} | sold {sold_count} | {price_text}')
     return ' | '.join(segments)
 
 
 def show_dashboard(data):
     store_summary = get_store_value_summary(data)
+    sales_summary = get_sales_summary(data)
     lines = [
         APP_OWNER,
         APP_SUBTITLE,
@@ -530,6 +744,7 @@ def show_dashboard(data):
         f'Inventory: {store_summary["inventory_count"]} account(s)',
         f'Priced: {store_summary["priced_accounts"]} | Unpriced: {store_summary["unpriced_accounts"]}',
         f'Estimated store value: {format_php(store_summary["inventory_value"])}',
+        f'Sold count: {sales_summary["sold_count"]} | Sold value: {format_php(sales_summary["total_sales_value"])}',
         '',
         'Stock overview:',
         build_stock_overview_line(data),
@@ -586,17 +801,26 @@ def prompt_positive_int(message):
     return value
 
 
+def prompt_timestamp_with_default(message, default_value):
+    raw_value = prompt_input(message).strip()
+    return raw_value or default_value
+
+
 def prompt_stock_choice(message, allow_blank=False):
     lines = [message, '']
     for index, stock_name in enumerate(STOCK_CHOICES, start=1):
         lines.append(f'[{index}] {stock_name}')
+    lines.append('[0] Back')
     if allow_blank:
-        lines.append('[0] Global fallback')
+        lines.append('[G] Global fallback')
 
     print_panel('Select Stock', lines, tone='bright_blue')
 
     raw_value = prompt_input('Choose stock number or name: ').strip().upper()
-    if allow_blank and raw_value in ('', '0'):
+    if raw_value in ('0', 'B', 'BACK'):
+        return BACK_ACTION
+
+    if allow_blank and raw_value in ('', 'G', 'GLOBAL'):
         return ''
 
     stock_name = parse_stock_choice(raw_value)
@@ -724,6 +948,9 @@ def add_row_account(data, stock_name, row):
 def add_account(data):
     show_action_header('Paste/Add Account(s)', 'Choose one stock, then paste one or many accounts into the batch.')
     stock_name = prompt_stock_choice('Choose stock name for the account(s):')
+    if stock_name == BACK_ACTION:
+        print_warning('Back to main menu.')
+        return
     if stock_name is None:
         return
 
@@ -924,6 +1151,191 @@ def show_account(data):
     print_panel(f'Account {account.get("code", "NO-CODE")}', lines, tone='bright_green')
 
 
+def mark_account_sold(data):
+    show_action_header('Mark Account As Sold', 'Pick an active account, then log the sold price and sold date.')
+    account = pick_account(data, 'Enter account code or name to mark as sold: ')
+    if not account:
+        return
+
+    stock_name = account.get('stock_name', '')
+    metrics = get_stock_price_metrics(data, stock_name)
+    market_price_php = metrics['unit_price'] if metrics else 0.0
+    pricing_source = metrics['source'] if metrics else 'no market data'
+
+    preview_lines = [
+        f'Code: {account.get("code", "no code")}',
+        f'Stock: {stock_name or "UNKNOWN"}',
+        f'Name: {account.get("name") or "no name saved"}',
+        f'Email: {account.get("email")}',
+        f'Current market price: {format_php(market_price_php) if market_price_php > 0 else "no market data"}',
+        f'Pricing source: {pricing_source}',
+    ]
+    print_panel('Sale Preview', preview_lines, tone='bright_yellow')
+
+    sold_price_php = prompt_positive_float('Sold price in PHP: ')
+    if sold_price_php is None:
+        return
+
+    default_sold_at = current_timestamp_text()
+    sold_at = prompt_timestamp_with_default(
+        f'Sold date/time (leave blank for {default_sold_at}): ',
+        default_sold_at,
+    )
+    sold_note = prompt_input('Sale note (optional): ').strip()
+
+    price_difference_php = sold_price_php - market_price_php if market_price_php > 0 else 0.0
+    price_difference_percent = 0.0
+    if market_price_php > 0:
+        price_difference_percent = (price_difference_php / market_price_php) * 100
+
+    sold_record = dict(account)
+    sold_record.update(
+        {
+            'sold_price_php': round(sold_price_php, 2),
+            'sold_at': sold_at,
+            'sold_note': sold_note,
+            'market_price_php': round(market_price_php, 2) if market_price_php > 0 else 0.0,
+            'price_difference_php': round(price_difference_php, 2),
+            'price_difference_percent': round(price_difference_percent, 2),
+            'pricing_source': pricing_source,
+        }
+    )
+
+    code = account.get('code', '')
+    data.setdefault('sold_accounts', {})
+    data['sold_accounts'][code] = sold_record
+    del data['accounts'][code]
+    save_data(data)
+
+    result_lines = [
+        f'Sold {code} for {format_php(sold_price_php)}.',
+        f'Sold at: {sold_at}',
+    ]
+    if sold_note:
+        result_lines.append(f'Sale note: {sold_note}')
+    if market_price_php > 0:
+        result_lines.append(f'Market price at sale: {format_php(market_price_php)}')
+        result_lines.append(describe_sale_vs_market(sold_record))
+    else:
+        result_lines.append('Market comparison: no market data available at time of sale')
+
+    print_panel('Sale Saved', result_lines, tone='bright_green')
+
+
+def show_sold_history(data):
+    show_action_header('Sold History', 'See what sold, when it sold, and how it compared to the market.')
+    sold_accounts = list(data.get('sold_accounts', {}).values())
+    if not sold_accounts:
+        print_warning('No sold accounts saved yet.')
+        return
+
+    sold_accounts.sort(
+        key=lambda account: (
+            account.get('sold_at', ''),
+            account.get('code', ''),
+        ),
+        reverse=True,
+    )
+
+    lines = []
+    for account in sold_accounts:
+        lines.append(
+            f'{account.get("code", "no code")} | {account.get("stock_name", "UNKNOWN")} | '
+            f'{account.get("name") or "no name"} | sold {format_php(account.get("sold_price_php", 0.0))} | '
+            f'{account.get("sold_at") or "no date"}'
+        )
+
+        detail_parts = [describe_sale_vs_market(account)]
+        if account.get('market_price_php', 0.0) > 0:
+            detail_parts.append(f'market {format_php(account["market_price_php"])}')
+        if account.get('pricing_source'):
+            detail_parts.append(f'source: {account["pricing_source"]}')
+        if account.get('sold_note'):
+            detail_parts.append(f'note: {account["sold_note"]}')
+        lines.append('  ' + ' | '.join(detail_parts))
+        lines.append('')
+
+    if lines and not lines[-1]:
+        lines.pop()
+
+    print_panel('Sold Accounts', lines, tone='bright_blue')
+
+    sales_summary = get_sales_summary(data)
+    summary_lines = [
+        f'Sold count: {sales_summary["sold_count"]}',
+        f'Total sold value: {format_php(sales_summary["total_sales_value"])}',
+        f'Compared against market: {sales_summary["market_compared_count"]}',
+    ]
+    if sales_summary['market_compared_count']:
+        summary_lines.append(f'Market reference total: {format_php(sales_summary["total_market_reference"])}')
+        summary_lines.append(f'Total difference vs market: {format_signed_php(sales_summary["total_difference"])}')
+
+    print_panel('Sales Summary', summary_lines, tone='bright_green')
+
+
+def show_market_state(data):
+    show_action_header('Market State', 'See the latest market movement and recent price condition for each stock.')
+
+    stock_lines = []
+    for stock_name in STOCK_CHOICES:
+        state = get_stock_market_state(data, stock_name)
+        inventory_count = count_accounts_for_stock(data, stock_name)
+        sold_count = count_sold_accounts_for_stock(data, stock_name)
+
+        if not state:
+            stock_lines.append(f'{stock_name} | in {inventory_count} | sold {sold_count} | no market samples yet')
+            stock_lines.append('')
+            continue
+
+        stock_lines.append(
+            f'{stock_name} | in {inventory_count} | sold {sold_count} | samples {state["sample_count"]}'
+        )
+        stock_lines.append(
+            f'  latest: {format_php(state["latest_unit_price"])} on '
+            f'{state["latest_recorded_at"] or "unknown time"}'
+        )
+        if state['movement_php'] is None:
+            stock_lines.append('  trend: not enough data yet')
+        else:
+            stock_lines.append(
+                f'  trend: {state["direction"]} {format_signed_php(state["movement_php"])} vs previous sample'
+            )
+        stock_lines.append(
+            f'  weighted market: {format_php(state["weighted_unit_price"])} | '
+            f'range: {format_php(state["lowest_unit_price"])} to {format_php(state["highest_unit_price"])}'
+        )
+        if state.get('latest_note'):
+            stock_lines.append(f'  latest note: {state["latest_note"]}')
+        stock_lines.append('')
+
+    if stock_lines and not stock_lines[-1]:
+        stock_lines.pop()
+
+    print_panel('Per-Stock Market', stock_lines, tone='bright_blue')
+
+    global_state = get_global_market_state(data)
+    global_lines = [f'Global fallback samples: {len(data["pricing"]["samples"])}']
+    if global_state:
+        global_lines.append(
+            f'Latest fallback price: {format_php(global_state["latest_unit_price"])} on '
+            f'{global_state["latest_recorded_at"] or "unknown time"}'
+        )
+        if global_state['movement_php'] is None:
+            global_lines.append('Trend: not enough data yet')
+        else:
+            global_lines.append(
+                f'Trend: {global_state["direction"]} {format_signed_php(global_state["movement_php"])} vs previous sample'
+            )
+        global_lines.append(
+            f'Weighted fallback: {format_php(global_state["weighted_unit_price"])} | '
+            f'range: {format_php(global_state["lowest_unit_price"])} to {format_php(global_state["highest_unit_price"])}'
+        )
+    else:
+        global_lines.append('No global fallback market samples yet.')
+
+    print_panel('Global Market State', global_lines, tone='bright_yellow')
+
+
 def delete_account(data):
     show_action_header('Delete Account', 'Search the account first, then confirm before removing it.')
     account = pick_account(data, 'Enter account code or name to delete: ')
@@ -959,6 +1371,9 @@ def add_market_sample(data):
         'Choose stock name for this market listing:',
         allow_blank=True,
     )
+    if stock_name == BACK_ACTION:
+        print_warning('Back to main menu.')
+        return
     if stock_name is None:
         return
 
@@ -971,10 +1386,16 @@ def add_market_sample(data):
         return
 
     note = prompt_input('Note/source (optional): ').strip()
+    default_recorded_at = current_timestamp_text()
+    recorded_at = prompt_timestamp_with_default(
+        f'Observed date/time (leave blank for {default_recorded_at}): ',
+        default_recorded_at,
+    )
     sample = {
         'total_price_php': total_price_php,
         'account_count': account_count,
         'note': note,
+        'recorded_at': recorded_at,
     }
 
     unit_price = total_price_php / account_count
@@ -988,6 +1409,7 @@ def add_market_sample(data):
             f'Listing price: {format_php(total_price_php)}',
             f'Accounts in listing: {account_count}',
             f'Unit price: {format_php(unit_price)}',
+            f'Observed at: {recorded_at}',
         ]
         if metrics:
             lines.append(f'Updated auto price: {format_php(metrics["unit_price"])}')
@@ -1003,6 +1425,7 @@ def add_market_sample(data):
             f'Listing price: {format_php(total_price_php)}',
             f'Accounts in listing: {account_count}',
             f'Fallback unit price: {format_php(unit_price)}',
+            f'Observed at: {recorded_at}',
         ]
         if metrics:
             lines.append(f'Updated global fallback price: {format_php(metrics["unit_price"])}')
@@ -1012,6 +1435,9 @@ def add_market_sample(data):
 def set_stock_info(data):
     show_action_header('Set Stock Info', 'Save a note or description for one stock choice.')
     stock_name = prompt_stock_choice('Choose a stock name to configure:')
+    if stock_name == BACK_ACTION:
+        print_warning('Back to main menu.')
+        return
     if stock_name is None:
         return
 
@@ -1044,8 +1470,9 @@ def show_pricing_summary(data):
         profile_samples = data['stock_profiles'][stock_name]['samples']
         metrics = get_stock_price_metrics(data, stock_name)
         inventory_count = count_accounts_for_stock(data, stock_name)
+        sold_count = count_sold_accounts_for_stock(data, stock_name)
 
-        stock_lines.append(f'{stock_name} | stored {inventory_count} | samples {len(profile_samples)}')
+        stock_lines.append(f'{stock_name} | stored {inventory_count} | sold {sold_count} | samples {len(profile_samples)}')
         stock_lines.append(f'  info: {info}')
 
         if metrics:
@@ -1102,18 +1529,27 @@ def main():
             show_account(data)
             pause_for_continue()
         elif choice == '4':
-            delete_account(data)
+            mark_account_sold(data)
             pause_for_continue()
         elif choice == '5':
-            add_market_sample(data)
+            show_sold_history(data)
             pause_for_continue()
         elif choice == '6':
-            set_stock_info(data)
+            add_market_sample(data)
             pause_for_continue()
         elif choice == '7':
-            show_pricing_summary(data)
+            set_stock_info(data)
             pause_for_continue()
         elif choice == '8':
+            show_market_state(data)
+            pause_for_continue()
+        elif choice == '9':
+            show_pricing_summary(data)
+            pause_for_continue()
+        elif choice == '10':
+            delete_account(data)
+            pause_for_continue()
+        elif choice == '11':
             print_panel('Exit', ['MAUS console closed.'], tone='bright_cyan')
             break
         else:

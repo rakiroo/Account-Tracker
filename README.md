@@ -41,11 +41,14 @@ Menu options:
 - 1: Paste/add account(s)
 - 2: List accounts
 - 3: View/fetch account
-- 4: Delete account
-- 5: Add market price sample
-- 6: Set stock info
-- 7: View pricing summary
-- 8: Exit
+- 4: Mark account as sold
+- 5: View sold history
+- 6: Add market price sample
+- 7: Set stock info
+- 8: View market state
+- 9: View pricing summary
+- 10: Delete account
+- 11: Exit
 
 ## Stock Choices
 The stock name is now a picked choice instead of a separate free-text stock name plus tag.
@@ -58,6 +61,10 @@ Current stock choices:
 - `RP`
 
 When adding accounts, you choose one stock name first, then paste the account info for that stock.
+
+If you open a stock/category picker by mistake, use:
+- `0` to go back
+- `G` for global fallback on market-sample screens
 
 ## Account Fields
 Each account stores:
@@ -137,6 +144,22 @@ Fetching an account shows:
 - notes
 - estimated price
 
+## Sold Tracking
+Choose `4) Mark account as sold` to move an active account out of inventory and into sold history.
+
+When you mark an account as sold, the app saves:
+- sold price
+- sold date/time
+- optional sale note
+- market price at the time of sale
+- difference between sold price and market price
+
+Choose `5) View sold history` to see:
+- what sold
+- when it sold
+- how much it sold for
+- whether it sold above or below market
+
 ## Pricing
 Pricing is now tied to the picked stock name choices:
 - `RA`
@@ -147,10 +170,20 @@ Pricing is now tied to the picked stock name choices:
 
 You can save stock info and market samples per stock name.
 
+Every market sample can also store:
+- observed date/time
+- note/source
+
 The auto price is calculated like this:
 - `sum of prices for that stock / sum of account counts for that stock`
 
 If a stock has no stock-specific market samples yet, the script can still use global market samples as a fallback.
+
+Choose `8) View market state` to see:
+- latest observed market price per stock
+- price movement versus the previous sample
+- weighted market average
+- price range from saved samples
 
 ## Price Input Formats
 The price prompt accepts inputs like:
