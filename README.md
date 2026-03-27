@@ -51,7 +51,9 @@ Menu options:
 - 11: Export backup
 - 12: Import backup
 - 13: Delete account
-- 14: Exit
+- 14: Push local data to Google Sheets
+- 15: Pull data from Google Sheets
+- 16: Exit
 
 ## Stock Choices
 The stock name is now a picked choice instead of a separate free-text stock name plus tag.
@@ -218,6 +220,51 @@ The price prompt accepts inputs like:
 This is useful for Git + Termux because:
 - you can `git pull` the latest script without losing your account data
 - your stock list is not mixed into your repo files
+
+## Google Sheets Backup/Sync
+This branch adds backup/sync mode with Google Sheets while keeping local JSON as the main source of truth.
+
+What it means:
+- local JSON is still your main live data
+- `Push` copies the current local data into Google Sheets
+- `Pull` restores local data from the latest Google Sheets snapshot
+
+Install the Sheets dependency:
+```bash
+pip install -r requirements-sheets.txt
+```
+
+Required environment variables:
+- `MAUS_GOOGLE_SERVICE_ACCOUNT_FILE`
+- `MAUS_GOOGLE_SHEETS_SPREADSHEET_ID`
+
+Example on Windows PowerShell:
+```powershell
+$env:MAUS_GOOGLE_SERVICE_ACCOUNT_FILE='C:\Users\Tanio\service-account.json'
+$env:MAUS_GOOGLE_SHEETS_SPREADSHEET_ID='your-spreadsheet-id-or-full-url'
+python account_manager.py
+```
+
+Example on Linux, macOS, or Termux:
+```bash
+export MAUS_GOOGLE_SERVICE_ACCOUNT_FILE="$HOME/service-account.json"
+export MAUS_GOOGLE_SHEETS_SPREADSHEET_ID="your-spreadsheet-id-or-full-url"
+python3 account_manager.py
+```
+
+Before it works, you also need to:
+1. Create a Google Cloud service account for Sheets access.
+2. Download its JSON credentials file.
+3. Create or choose a Google Sheet.
+4. Share that spreadsheet with the service account email from the JSON file.
+
+Menu options:
+- `14) Push local data to Google Sheets`
+- `15) Pull data from Google Sheets`
+
+Safety note:
+- `Pull` replaces your local JSON with the spreadsheet snapshot
+- before pull, the app saves a local backup to `~/.termux_accounts.pre_sheets_pull_backup.json`
 
 ## Move Data Between Phones
 Use these menu options for manual transfer:

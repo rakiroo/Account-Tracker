@@ -11,6 +11,7 @@ from datetime import datetime
 DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
 DEFAULT_EXPORT_FILE = os.path.expanduser('~/maus-account-backup.json')
 PRE_IMPORT_BACKUP_FILE = os.path.expanduser('~/.termux_accounts.pre_import_backup.json')
+PRE_SHEETS_PULL_BACKUP_FILE = os.path.expanduser('~/.termux_accounts.pre_sheets_pull_backup.json')
 STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP')
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
@@ -32,7 +33,9 @@ MENU_OPTIONS = (
     ('11', 'Export backup', 'Save your data to a transfer file'),
     ('12', 'Import backup', 'Load data from another phone backup'),
     ('13', 'Delete account', 'Remove a stock entry safely'),
-    ('14', 'Exit', 'Close the MAUS console'),
+    ('14', 'Push local data to Google Sheets', 'Back up your local JSON into a spreadsheet'),
+    ('15', 'Pull data from Google Sheets', 'Restore local JSON from your Sheets backup'),
+    ('16', 'Exit', 'Close the MAUS console'),
 )
 ANSI_CODES = {
     'reset': '\033[0m',
@@ -1572,6 +1575,117 @@ def import_backup(data):
     )
 
 
+def print_sheets_setup_help(extra_message=''):
+    lines = []
+    if extra_message:
+        lines.append(extra_message)
+        lines.append('')
+    lines.extend(
+        [
+            'Required environment variables:',
+            '- MAUS_GOOGLE_SERVICE_ACCOUNT_FILE',
+            '- MAUS_GOOGLE_SHEETS_SPREADSHEET_ID',
+            '',
+            'Install dependency first:',
+            '- pip install -r requirements-sheets.txt',
+            '',
+            'Then share the target spreadsheet with the service account email from your JSON credentials file.',
+        ]
+    )
+    print_panel('Google Sheets Setup', lines, tone='bright_yellow')
+
+
+def push_google_sheets_backup(data):
+    show_action_header('Push Local Data To Google Sheets', 'Copy your local MAUS JSON into a Google Sheets backup.')
+
+    try:
+        import sheets_sync
+        summary = sheets_sync.push_data_to_sheets(data)
+    except ModuleNotFoundError:
+        print_sheets_setup_help('Sheets sync module is missing.')
+        return
+    except Exception as error:
+        if error.__class__.__name__ == 'SheetsSyncConfigError':
+            print_sheets_setup_help(str(error))
+        elif error.__class__.__name__ == 'SpreadsheetNotFound':
+            print_sheets_setup_help(
+                'Spreadsheet not found. Check the spreadsheet ID/URL and make sure it is shared with the service account.'
+            )
+        else:
+            print_error(f'Google Sheets push failed: {error}')
+        return
+
+    print_panel(
+        'Sheets Push Complete',
+        [
+            f'Spreadsheet: {summary["spreadsheet_title"]}',
+            f'Active accounts pushed: {summary["active_account_count"]}',
+            f'Sold accounts pushed: {summary["sold_account_count"]}',
+            f'Market sample rows pushed: {summary["market_sample_count"]}',
+            f'Stock profiles pushed: {summary["stock_profile_count"]}',
+        ],
+        tone='bright_green',
+    )
+
+
+def pull_google_sheets_backup(data):
+    show_action_header('Pull Data From Google Sheets', 'Replace local JSON with the latest snapshot from your Google Sheets backup.')
+    print_panel(
+        'Pull Warning',
+        [
+            'This replaces the current local data on this device.',
+            f'A safety backup will be saved first at: {PRE_SHEETS_PULL_BACKUP_FILE}',
+        ],
+        tone='bright_yellow',
+    )
+
+    confirm = prompt_input('Replace local data using Google Sheets? (y/N): ', 'bright_yellow', 'bold').strip().lower()
+    if confirm != 'y':
+        print_warning('Sheets pull canceled.')
+        return
+
+    try:
+        import sheets_sync
+        pulled_data, summary = sheets_sync.pull_data_from_sheets()
+    except ModuleNotFoundError:
+        print_sheets_setup_help('Sheets sync module is missing.')
+        return
+    except Exception as error:
+        if error.__class__.__name__ == 'SheetsSyncConfigError':
+            print_sheets_setup_help(str(error))
+        elif error.__class__.__name__ == 'SpreadsheetNotFound':
+            print_sheets_setup_help(
+                'Spreadsheet not found. Check the spreadsheet ID/URL and make sure it is shared with the service account.'
+            )
+        else:
+            print_error(f'Google Sheets pull failed: {error}')
+        return
+
+    try:
+        if os.path.exists(DATA_FILE):
+            save_data_to_path(data, PRE_SHEETS_PULL_BACKUP_FILE)
+        data.clear()
+        data.update(pulled_data)
+        save_data(data)
+    except OSError as error:
+        print_error(f'Could not save pulled data locally: {error}')
+        return
+
+    store_summary = get_store_value_summary(data)
+    sales_summary = get_sales_summary(data)
+    print_panel(
+        'Sheets Pull Complete',
+        [
+            f'Spreadsheet: {summary["spreadsheet_title"]}',
+            f'Active accounts loaded: {store_summary["inventory_count"]}',
+            f'Sold accounts loaded: {sales_summary["sold_count"]}',
+            f'Market sample rows loaded: {summary["market_sample_count"]}',
+            f'Safety backup saved at: {PRE_SHEETS_PULL_BACKUP_FILE}',
+        ],
+        tone='bright_green',
+    )
+
+
 def delete_account(data):
     show_action_header('Delete Account', 'Search the account first, then confirm before removing it.')
     account = pick_account(data, 'Enter account code or name to delete: ')
@@ -1795,6 +1909,12 @@ def main():
             delete_account(data)
             pause_for_continue()
         elif choice == '14':
+            push_google_sheets_backup(data)
+            pause_for_continue()
+        elif choice == '15':
+            pull_google_sheets_backup(data)
+            pause_for_continue()
+        elif choice == '16':
             print_panel('Exit', ['MAUS console closed.'], tone='bright_cyan')
             break
         else:
