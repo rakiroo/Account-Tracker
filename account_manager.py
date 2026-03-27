@@ -8,9 +8,11 @@ import sys
 import textwrap
 from datetime import datetime
 
-DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
-DEFAULT_EXPORT_FILE = os.path.expanduser('~/maus-account-backup.json')
-PRE_IMPORT_BACKUP_FILE = os.path.expanduser('~/.termux_accounts.pre_import_backup.json')
+DATA_FILE = os.path.abspath(os.path.expanduser(os.environ.get('MAUS_DATA_FILE', '~/.termux_accounts.json')))
+DEFAULT_EXPORT_FILE = os.path.abspath(os.path.expanduser(os.environ.get('MAUS_EXPORT_FILE', '~/maus-account-backup.json')))
+PRE_IMPORT_BACKUP_FILE = os.path.abspath(
+    os.path.expanduser(os.environ.get('MAUS_PRE_IMPORT_BACKUP_FILE', '~/.termux_accounts.pre_import_backup.json'))
+)
 STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP')
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
@@ -646,6 +648,56 @@ def describe_sale_vs_market(sold_record):
     if difference_php < 0:
         return f'Below market by {format_php(abs(difference_php))} ({format_signed_percent(difference_percent)})'
     return 'Matched market price.'
+
+
+def update_account_fields(account, field_updates):
+    changes = []
+    for field_name, updated_value in field_updates.items():
+        if account.get(field_name) != updated_value:
+            account[field_name] = updated_value
+            changes.append(field_name)
+
+    if 'password' in changes and account.get('password'):
+        account['legacy_password_hash'] = ''
+
+    return changes
+
+
+def sell_account_record(data, account, sold_price_php, sold_at='', sold_note=''):
+    stock_name = account.get('stock_name', '')
+    metrics = get_stock_price_metrics(data, stock_name)
+    market_price_php = metrics['unit_price'] if metrics else 0.0
+    pricing_source = metrics['source'] if metrics else 'no market data'
+
+    sold_at = str(sold_at).strip() or current_timestamp_text()
+    sold_note = str(sold_note).strip()
+    sold_price_php = round(float(sold_price_php), 2)
+
+    price_difference_php = sold_price_php - market_price_php if market_price_php > 0 else 0.0
+    price_difference_percent = 0.0
+    if market_price_php > 0:
+        price_difference_percent = (price_difference_php / market_price_php) * 100
+
+    sold_record = dict(account)
+    sold_record.update(
+        {
+            'sold_price_php': sold_price_php,
+            'sold_at': sold_at,
+            'sold_note': sold_note,
+            'market_price_php': round(market_price_php, 2) if market_price_php > 0 else 0.0,
+            'price_difference_php': round(price_difference_php, 2),
+            'price_difference_percent': round(price_difference_percent, 2),
+            'pricing_source': pricing_source,
+        }
+    )
+
+    code = account.get('code', '')
+    data.setdefault('sold_accounts', {})
+    data['sold_accounts'][code] = sold_record
+    if code in data['accounts']:
+        del data['accounts'][code]
+
+    return sold_record
 
 
 def format_account_brief(data, account):

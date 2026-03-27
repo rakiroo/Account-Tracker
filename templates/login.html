@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unlock MAUS Web</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='maus.css') }}">
+</head>
+<body class="login-body">
+  <div class="page-glow glow-one"></div>
+  <div class="page-glow glow-two"></div>
+  <main class="login-wrap">
+    <section class="panel login-panel">
+      <p class="eyebrow">Owner codename: MAUS</p>
+      <h1>Unlock the web vault</h1>
+      <p class="muted">This browser view stays private behind a single password before any account data is shown.</p>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <section class="flash-stack compact">
+            {% for category, message in messages %}
+              <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          </section>
+        {% endif %}
+      {% endwith %}
+      <form method="post" class="stack-form">
+        <label>
+          <span>Password</span>
+          <input type="password" name="password" placeholder="Enter web password" autofocus>
+        </label>
+        <button type="submit">Unlock</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

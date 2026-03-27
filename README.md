@@ -32,6 +32,55 @@ Your saved accounts and pricing data stay safe because they are stored outside t
 python account_manager.py
 ```
 
+## Private Web App
+This branch also includes a browser-based MAUS web app in:
+- `web_app.py`
+
+Install the web dependency:
+```bash
+pip install -r requirements-web.txt
+```
+
+Run it locally:
+```bash
+python web_app.py
+```
+
+Open in your browser:
+- `http://127.0.0.1:5000`
+
+Optional privacy password:
+- `MAUS_WEB_PASSWORD`
+
+Optional network settings:
+- `MAUS_WEB_HOST`
+- `MAUS_WEB_PORT`
+- `MAUS_WEB_SECRET_KEY`
+- `MAUS_DATA_FILE`
+
+Example on Windows PowerShell:
+```powershell
+$env:MAUS_WEB_PASSWORD='your-private-password'
+$env:MAUS_WEB_HOST='0.0.0.0'
+$env:MAUS_WEB_PORT='5000'
+$env:MAUS_DATA_FILE='C:\Users\Tanio\maus-data.json'
+python web_app.py
+```
+
+If you use `0.0.0.0`, you can open it from another phone on the same Wi-Fi using your computer's local IP, for example:
+- `http://192.168.1.20:5000`
+
+The web app currently lets you:
+- view dashboard totals
+- browse and search active accounts
+- add new accounts
+- edit active accounts including `fbfs`
+- mark accounts as sold
+- view sold history
+- track market state
+- add market samples
+- update stock info
+
 The app now uses a cleaner MAUS-themed terminal UI with:
 - a dashboard-style home screen
 - colored panels on supported terminals like Termux

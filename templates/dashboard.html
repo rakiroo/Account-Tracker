@@ -1,0 +1,107 @@
+{% extends "layout.html" %}
+{% block title %}MAUS Web Dashboard{% endblock %}
+{% block content %}
+  <section class="hero panel">
+    <div>
+      <p class="eyebrow">Private browser control room</p>
+      <h1>Inventory, sales, and market motion in one place.</h1>
+      <p class="muted">Use this as the multi-phone view for your MAUS data. Add, edit, sell, and track market signals from a browser.</p>
+    </div>
+    <div class="hero-actions">
+      <a class="button-link" href="{{ url_for('account_new') }}">Add account</a>
+      <a class="button-link secondary" href="{{ url_for('market') }}">Update market</a>
+    </div>
+  </section>
+
+  <section class="summary-grid">
+    <article class="metric-card panel">
+      <span class="metric-label">Active accounts</span>
+      <strong>{{ store_summary.inventory_count }}</strong>
+      <small>Priced: {{ store_summary.priced_accounts }} | Unpriced: {{ store_summary.unpriced_accounts }}</small>
+    </article>
+    <article class="metric-card panel">
+      <span class="metric-label">Inventory value</span>
+      <strong>{{ store_summary.inventory_value|php }}</strong>
+      <small>Estimated from saved market samples</small>
+    </article>
+    <article class="metric-card panel">
+      <span class="metric-label">Sold accounts</span>
+      <strong>{{ sales_summary.sold_count }}</strong>
+      <small>Compared to market: {{ sales_summary.market_compared_count }}</small>
+    </article>
+    <article class="metric-card panel">
+      <span class="metric-label">Sold value</span>
+      <strong>{{ sales_summary.total_sales_value|php }}</strong>
+      <small>Difference vs market: {{ sales_summary.total_difference|signed_php }}</small>
+    </article>
+  </section>
+
+  <section class="section-head">
+    <div>
+      <p class="eyebrow">Stock pulse</p>
+      <h2>Live stock snapshot</h2>
+    </div>
+    <a class="text-link" href="{{ url_for('market') }}">Open market view</a>
+  </section>
+  <section class="card-grid">
+    {% for card in stock_cards %}
+      <article class="stock-card panel">
+        <div class="stock-topline">
+          <span class="stock-chip">{{ card.stock_name }}</span>
+          <span class="stock-meta">Active {{ card.active_count }} | Sold {{ card.sold_count }}</span>
+        </div>
+        <h3>{{ card.metrics.unit_price|php if card.metrics else 'No market price yet' }}</h3>
+        <p class="muted">{{ card.info or 'No stock info saved yet.' }}</p>
+        {% if card.state %}
+          <p class="mini-note">Latest {{ card.state.latest_unit_price|php }} on {{ card.state.latest_recorded_at or 'unknown time' }}</p>
+        {% else %}
+          <p class="mini-note">No stock-specific market samples yet.</p>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </section>
+
+  <section class="two-up">
+    <article class="panel">
+      <div class="section-head compact">
+        <div>
+          <p class="eyebrow">Fresh stock</p>
+          <h2>Recent active accounts</h2>
+        </div>
+        <a class="text-link" href="{{ url_for('accounts') }}">See all</a>
+      </div>
+      <div class="stack-list">
+        {% for account in recent_accounts %}
+          <a class="list-row" href="{{ url_for('account_detail', code=account.code) }}">
+            <strong>{{ account.code }}</strong>
+            <span>{{ account.stock_name }} | {{ account.name or 'No name' }}</span>
+            <small>fbfs {{ account.fbfs }}</small>
+          </a>
+        {% else %}
+          <p class="empty-state">No active accounts saved yet.</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="section-head compact">
+        <div>
+          <p class="eyebrow">Recent exits</p>
+          <h2>Latest sold records</h2>
+        </div>
+        <a class="text-link" href="{{ url_for('sold_history') }}">See sold</a>
+      </div>
+      <div class="stack-list">
+        {% for account in recent_sales %}
+          <div class="list-row static-row">
+            <strong>{{ account.code }}</strong>
+            <span>{{ account.stock_name }} | {{ account.name or 'No name' }}</span>
+            <small>{{ account.sold_price_php|php }} on {{ account.sold_at or 'unknown' }}</small>
+          </div>
+        {% else %}
+          <p class="empty-state">No sold records yet.</p>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+{% endblock %}

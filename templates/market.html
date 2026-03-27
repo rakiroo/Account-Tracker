@@ -1,0 +1,97 @@
+{% extends "layout.html" %}
+{% block title %}Market State{% endblock %}
+{% block content %}
+  <section class="section-head">
+    <div>
+      <p class="eyebrow">Market intelligence</p>
+      <h1>Price state and stock notes</h1>
+    </div>
+  </section>
+
+  <section class="summary-grid">
+    <article class="metric-card panel">
+      <span class="metric-label">Inventory value</span>
+      <strong>{{ store_summary.inventory_value|php }}</strong>
+      <small>Active accounts: {{ store_summary.inventory_count }}</small>
+    </article>
+    <article class="metric-card panel">
+      <span class="metric-label">Global samples</span>
+      <strong>{{ global_samples }}</strong>
+      <small>{{ global_state.latest_unit_price|php if global_state else 'No fallback price' }}</small>
+    </article>
+  </section>
+
+  <section class="card-grid">
+    {% for row in stock_rows %}
+      <article class="panel stock-card">
+        <div class="stock-topline">
+          <span class="stock-chip">{{ row.stock_name }}</span>
+          <span class="stock-meta">Samples {{ row.sample_count }}</span>
+        </div>
+        <h2>{{ row.metrics.unit_price|php if row.metrics else 'No market data' }}</h2>
+        <p class="muted">{{ row.info or 'No saved stock info yet.' }}</p>
+        <ul class="detail-list">
+          <li><span>Active</span><strong>{{ row.active_count }}</strong></li>
+          <li><span>Sold</span><strong>{{ row.sold_count }}</strong></li>
+          <li><span>Latest</span><strong>{{ row.state.latest_unit_price|php if row.state else 'None yet' }}</strong></li>
+          <li><span>Trend</span><strong>{{ row.state.direction if row.state and row.state.movement_php is not none else 'Not enough data' }}</strong></li>
+        </ul>
+      </article>
+    {% endfor %}
+  </section>
+
+  <section class="two-up">
+    <article class="panel form-panel">
+      <p class="eyebrow">Feed the market</p>
+      <h2>Add market sample</h2>
+      <form method="post" action="{{ url_for('market_sample_add') }}" class="stack-form compact-form">
+        <label>
+          <span>Stock</span>
+          <select name="stock_name">
+            <option value="GLOBAL">Global fallback</option>
+            {% for stock_name in stock_choices %}
+              <option value="{{ stock_name }}">{{ stock_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Total price</span>
+          <input type="text" name="total_price_php" placeholder="54 or 1,250" required>
+        </label>
+        <label>
+          <span>Account count</span>
+          <input type="number" min="1" name="account_count" value="1" required>
+        </label>
+        <label>
+          <span>Observed at</span>
+          <input type="text" name="recorded_at" placeholder="Leave blank for current date/time">
+        </label>
+        <label>
+          <span>Note/source</span>
+          <textarea name="note" rows="3" placeholder="Optional note"></textarea>
+        </label>
+        <button type="submit">Save sample</button>
+      </form>
+    </article>
+
+    <article class="panel form-panel">
+      <p class="eyebrow">Stock notes</p>
+      <h2>Update stock info</h2>
+      <form method="post" action="{{ url_for('market_info_save') }}" class="stack-form compact-form">
+        <label>
+          <span>Stock</span>
+          <select name="stock_name" required>
+            {% for stock_name in stock_choices %}
+              <option value="{{ stock_name }}">{{ stock_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Info</span>
+          <textarea name="info" rows="6" placeholder="Describe what this stock means, how you price it, or any key note"></textarea>
+        </label>
+        <button type="submit">Save stock info</button>
+      </form>
+    </article>
+  </section>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+{% block title %}{{ account.code }}{% endblock %}
+{% block content %}
+  <section class="section-head">
+    <div>
+      <p class="eyebrow">Account detail</p>
+      <h1>{{ account.code }} • {{ account.name or 'No name saved' }}</h1>
+    </div>
+    <div class="inline-actions">
+      <a class="button-link secondary" href="{{ url_for('account_edit', code=account.code) }}">Edit</a>
+      <a class="button-link ghost" href="{{ url_for('accounts') }}">Back</a>
+    </div>
+  </section>
+
+  <section class="two-up">
+    <article class="panel">
+      <div class="stock-topline">
+        <span class="stock-chip">{{ account.stock_name }}</span>
+        <span class="stock-meta">{{ metrics.unit_price|php if metrics else 'No market data' }}</span>
+      </div>
+      <ul class="detail-list roomy">
+        <li><span>Name</span><strong>{{ account.name or 'No name saved' }}</strong></li>
+        <li><span>Email</span><strong>{{ account.email }}</strong></li>
+        <li><span>Password</span><strong>{{ account.password or 'Not saved' }}</strong></li>
+        <li><span>fbfs</span><strong>{{ account.fbfs }}</strong></li>
+        <li><span>Link</span><strong>{{ account.link or 'No link saved' }}</strong></li>
+        <li><span>Stock info</span><strong>{{ stock_info or 'No stock info saved' }}</strong></li>
+        <li><span>Notes</span><strong>{{ account.notes or 'No notes' }}</strong></li>
+      </ul>
+    </article>
+
+    <article class="panel">
+      <p class="eyebrow">Actions</p>
+      <h2>Move or remove this stock</h2>
+      <form method="post" action="{{ url_for('account_sell', code=account.code) }}" class="stack-form compact-form">
+        <label>
+          <span>Sold price</span>
+          <input type="text" name="sold_price" placeholder="54 or 54php" required>
+        </label>
+        <label>
+          <span>Sold date/time</span>
+          <input type="text" name="sold_at" placeholder="Leave blank for now">
+        </label>
+        <label>
+          <span>Sale note</span>
+          <textarea name="sold_note" rows="3" placeholder="Optional sale note"></textarea>
+        </label>
+        <button type="submit">Mark as sold</button>
+      </form>
+
+      <form method="post" action="{{ url_for('account_delete', code=account.code) }}" class="stack-form compact-form danger-form">
+        <button type="submit" class="danger">Delete account</button>
+      </form>
+    </article>
+  </section>
+{% endblock %}

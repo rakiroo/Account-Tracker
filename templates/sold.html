@@ -1,0 +1,55 @@
+{% extends "layout.html" %}
+{% block title %}Sold History{% endblock %}
+{% block content %}
+  <section class="section-head">
+    <div>
+      <p class="eyebrow">Closed stock</p>
+      <h1>Sold history</h1>
+    </div>
+  </section>
+
+  <section class="summary-grid">
+    <article class="metric-card panel">
+      <span class="metric-label">Sold count</span>
+      <strong>{{ sales_summary.sold_count }}</strong>
+      <small>Compared to market: {{ sales_summary.market_compared_count }}</small>
+    </article>
+    <article class="metric-card panel">
+      <span class="metric-label">Sold value</span>
+      <strong>{{ sales_summary.total_sales_value|php }}</strong>
+      <small>Total difference: {{ sales_summary.total_difference|signed_php }}</small>
+    </article>
+    <article class="metric-card panel">
+      <span class="metric-label">Market reference</span>
+      <strong>{{ sales_summary.total_market_reference|php }}</strong>
+      <small>Only for sold records with market comparison</small>
+    </article>
+  </section>
+
+  <section class="stack-grid">
+    {% for item in sold_cards %}
+      <article class="panel sold-card">
+        <div class="stock-topline">
+          <span class="stock-chip">{{ item.account.stock_name }}</span>
+          <span class="stock-meta">{{ item.account.code }}</span>
+        </div>
+        <h2>{{ item.account.name or 'No name' }}</h2>
+        <p class="muted">{{ item.comparison }}</p>
+        <ul class="detail-list">
+          <li><span>Sold</span><strong>{{ item.account.sold_price_php|php }}</strong></li>
+          <li><span>Date</span><strong>{{ item.account.sold_at or 'Unknown' }}</strong></li>
+          <li><span>Market</span><strong>{{ item.account.market_price_php|php if item.account.market_price_php else 'No comparison' }}</strong></li>
+          <li><span>Difference</span><strong>{{ item.account.price_difference_php|signed_php if item.account.market_price_php else 'No comparison' }}</strong></li>
+        </ul>
+        {% if item.account.sold_note %}
+          <p class="mini-note">{{ item.account.sold_note }}</p>
+        {% endif %}
+      </article>
+    {% else %}
+      <article class="panel empty-panel">
+        <h2>No sold records yet</h2>
+        <p class="muted">Sold accounts will appear here once you move them out of active stock.</p>
+      </article>
+    {% endfor %}
+  </section>
+{% endblock %}

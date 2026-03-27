@@ -1,0 +1,57 @@
+{% extends "layout.html" %}
+{% block title %}Active Accounts{% endblock %}
+{% block content %}
+  <section class="section-head">
+    <div>
+      <p class="eyebrow">Active inventory</p>
+      <h1>Accounts in stock</h1>
+    </div>
+    <a class="button-link" href="{{ url_for('account_new') }}">Add account</a>
+  </section>
+
+  <section class="panel">
+    <form method="get" class="filter-bar">
+      <label>
+        <span>Search</span>
+        <input type="text" name="q" value="{{ query }}" placeholder="Code, name, stock, or email">
+      </label>
+      <label>
+        <span>Stock</span>
+        <select name="stock">
+          <option value="">All stocks</option>
+          {% for stock_name in stock_choices %}
+            <option value="{{ stock_name }}" {% if stock_filter == stock_name %}selected{% endif %}>{{ stock_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filter</button>
+    </form>
+  </section>
+
+  <section class="card-grid">
+    {% for item in account_cards %}
+      <article class="panel account-card">
+        <div class="stock-topline">
+          <span class="stock-chip">{{ item.account.stock_name }}</span>
+          <span class="stock-meta">{{ item.account.code }}</span>
+        </div>
+        <h2>{{ item.account.name or 'No name saved' }}</h2>
+        <p class="muted">{{ item.info or 'No stock info saved.' }}</p>
+        <ul class="detail-list">
+          <li><span>Email</span><strong>{{ item.account.email }}</strong></li>
+          <li><span>fbfs</span><strong>{{ item.account.fbfs }}</strong></li>
+          <li><span>Price</span><strong>{{ item.metrics.unit_price|php if item.metrics else 'No market data' }}</strong></li>
+        </ul>
+        <div class="inline-actions">
+          <a class="button-link secondary" href="{{ url_for('account_detail', code=item.account.code) }}">Open</a>
+          <a class="button-link ghost" href="{{ url_for('account_edit', code=item.account.code) }}">Edit</a>
+        </div>
+      </article>
+    {% else %}
+      <article class="panel empty-panel">
+        <h2>No accounts found</h2>
+        <p class="muted">Try a different search, remove the stock filter, or add a new account.</p>
+      </article>
+    {% endfor %}
+  </section>
+{% endblock %}
