@@ -13,6 +13,13 @@ DEFAULT_EXPORT_FILE = os.path.expanduser('~/maus-account-backup.json')
 PRE_IMPORT_BACKUP_FILE = os.path.expanduser('~/.termux_accounts.pre_import_backup.json')
 PRE_SHEETS_PULL_BACKUP_FILE = os.path.expanduser('~/.termux_accounts.pre_sheets_pull_backup.json')
 STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP')
+STOCK_FULL_NAMES = {
+    'RA': 'REAL ACCOUNT',
+    'PR': 'PREMIUM ACCOUNT',
+    'ON': 'ONE NAME',
+    'MN': 'MIX NAME',
+    'RP': 'RPNORMS',
+}
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
 BACK_ACTION = '__BACK__'
@@ -33,8 +40,8 @@ MENU_OPTIONS = (
     ('11', 'Export backup', 'Save your data to a transfer file'),
     ('12', 'Import backup', 'Load data from another phone backup'),
     ('13', 'Delete account', 'Remove a stock entry safely'),
-    ('14', 'Push local data to Google Sheets', 'Back up your local JSON into a spreadsheet'),
-    ('15', 'Pull data from Google Sheets', 'Restore local JSON from your Sheets backup'),
+    ('14', 'Push local data to Google Sheets', 'Merge this device into your shared spreadsheet backup'),
+    ('15', 'Pull data from Google Sheets', 'Merge the shared spreadsheet backup into this device'),
     ('16', 'Exit', 'Close the MAUS console'),
 )
 ANSI_CODES = {
@@ -183,6 +190,43 @@ def make_account_code(number):
     return f'{ACCOUNT_CODE_PREFIX}{number:0{ACCOUNT_CODE_DIGITS}d}'
 
 
+def stock_alias_key(value):
+    return ''.join(character for character in str(value).upper() if character.isalnum())
+
+
+def normalize_stock_name(value):
+    cleaned = str(value).strip()
+    if not cleaned:
+        return ''
+
+    upper_cleaned = cleaned.upper()
+    if upper_cleaned in STOCK_CHOICES:
+        return upper_cleaned
+
+    alias_map = {stock_alias_key(stock_name): stock_name for stock_name in STOCK_CHOICES}
+    alias_map.update({stock_alias_key(full_name): stock_name for stock_name, full_name in STOCK_FULL_NAMES.items()})
+    return alias_map.get(stock_alias_key(cleaned), upper_cleaned)
+
+
+def get_stock_full_name(stock_name):
+    normalized = normalize_stock_name(stock_name)
+    return STOCK_FULL_NAMES.get(normalized, normalized or str(stock_name).strip() or 'UNKNOWN')
+
+
+def format_stock_label(stock_name):
+    normalized = normalize_stock_name(stock_name)
+    if normalized in STOCK_FULL_NAMES:
+        return f'{normalized} - {STOCK_FULL_NAMES[normalized]}'
+    return normalized or str(stock_name).strip() or 'UNKNOWN'
+
+
+def get_stock_sheet_name(stock_name):
+    normalized = normalize_stock_name(stock_name)
+    if normalized in STOCK_FULL_NAMES:
+        return STOCK_FULL_NAMES[normalized]
+    return normalized or str(stock_name).strip()
+
+
 def generate_unique_account_code(used_codes):
     highest_number = 0
     for code in used_codes:
@@ -200,7 +244,7 @@ def generate_unique_account_code(used_codes):
 def parse_stock_choice(raw_value):
     normalized = str(raw_value).strip().upper()
     choice_map = {str(index): stock_name for index, stock_name in enumerate(STOCK_CHOICES, start=1)}
-    return choice_map.get(normalized, normalized)
+    return normalize_stock_name(choice_map.get(normalized, normalized))
 
 
 def normalize_optional_text(value):
@@ -254,11 +298,11 @@ def normalize_accounts(accounts):
             continue
 
         raw_key = str(key).strip()
-        stock_name = str(info.get('stock_name', '')).strip().upper()
+        stock_name = normalize_stock_name(info.get('stock_name', ''))
         if not stock_name:
-            stock_name = str(info.get('tag', '')).strip().upper()
+            stock_name = normalize_stock_name(info.get('tag', ''))
         if not stock_name and raw_key and not looks_like_account_code(raw_key):
-            stock_name = raw_key.upper()
+            stock_name = normalize_stock_name(raw_key) or raw_key.upper()
 
         record = {
             'code': str(info.get('code', '')).strip().upper(),
@@ -267,11 +311,9 @@ def normalize_accounts(accounts):
             'link': normalize_optional_text(info.get('link', '')),
             'email': str(info.get('email', '')).strip(),
             'password': str(info.get('password', '')).strip(),
-            'legacy_password_hash': str(
-                info.get('legacy_password_hash') or info.get('password_hash', '')
-            ).strip(),
             'notes': normalize_optional_text(info.get('notes', '')),
             'fbfs': normalize_non_negative_int(info.get('fbfs', 0)),
+            'updated_at': str(info.get('updated_at', '')).strip(),
         }
 
         if not record['code'] and looks_like_account_code(raw_key):
@@ -341,11 +383,11 @@ def normalize_sold_accounts(raw_sold_accounts):
             continue
 
         raw_key = str(key).strip()
-        stock_name = str(info.get('stock_name', '')).strip().upper()
+        stock_name = normalize_stock_name(info.get('stock_name', ''))
         if not stock_name:
-            stock_name = str(info.get('tag', '')).strip().upper()
+            stock_name = normalize_stock_name(info.get('tag', ''))
         if not stock_name and raw_key and not looks_like_account_code(raw_key):
-            stock_name = raw_key.upper()
+            stock_name = normalize_stock_name(raw_key) or raw_key.upper()
 
         market_price_php = normalize_non_negative_float(info.get('market_price_php'))
         sold_price_php = normalize_non_negative_float(info.get('sold_price_php'))
@@ -361,11 +403,9 @@ def normalize_sold_accounts(raw_sold_accounts):
             'link': normalize_optional_text(info.get('link', '')),
             'email': str(info.get('email', '')).strip(),
             'password': str(info.get('password', '')).strip(),
-            'legacy_password_hash': str(
-                info.get('legacy_password_hash') or info.get('password_hash', '')
-            ).strip(),
             'notes': normalize_optional_text(info.get('notes', '')),
             'fbfs': normalize_non_negative_int(info.get('fbfs', 0)),
+            'updated_at': str(info.get('updated_at', info.get('sold_at', ''))).strip(),
             'sold_price_php': round(sold_price_php, 2),
             'sold_at': str(info.get('sold_at', '')).strip(),
             'sold_note': normalize_optional_text(info.get('sold_note', info.get('sale_note', ''))),
@@ -657,10 +697,12 @@ def format_account_brief(data, account):
 
     parts = [
         account.get('code', 'NO-CODE'),
-        stock_name or 'UNKNOWN',
+        format_stock_label(stock_name),
     ]
     if account.get('name'):
         parts.append(account['name'])
+    if account.get('password'):
+        parts.append(f'pass: {account["password"]}')
     parts.append(f'fbfs: {account.get("fbfs", 0)}')
     if metrics:
         parts.append(format_php(metrics['unit_price']))
@@ -685,6 +727,7 @@ def search_accounts(data, query):
         fields = [
             account.get('code', ''),
             account.get('stock_name', ''),
+            get_stock_full_name(account.get('stock_name', '')),
             account.get('name', ''),
             account.get('email', ''),
         ]
@@ -753,7 +796,7 @@ def build_stock_overview_line(data):
         sold_count = count_sold_accounts_for_stock(data, stock_name)
         metrics = get_stock_price_metrics(data, stock_name)
         price_text = format_php(metrics['unit_price']) if metrics else 'no price'
-        segments.append(f'{stock_name} in {inventory_count} | sold {sold_count} | {price_text}')
+        segments.append(f'{stock_name}({get_stock_full_name(stock_name)}) in {inventory_count} | sold {sold_count} | {price_text}')
     return ' | '.join(segments)
 
 
@@ -871,7 +914,7 @@ def prompt_edit_stock_name(current_stock_name):
     current_stock_name = str(current_stock_name).strip().upper() or 'UNKNOWN'
     while True:
         raw_value = prompt_input(
-            f'Stock [{current_stock_name}] (Enter to keep, number/name to change, 0 to cancel): '
+            f'Stock [{format_stock_label(current_stock_name)}] (Enter to keep, number/name to change, 0 to cancel): '
         ).strip().upper()
         if raw_value == '':
             return current_stock_name
@@ -888,7 +931,7 @@ def prompt_edit_stock_name(current_stock_name):
 def prompt_stock_choice(message, allow_blank=False):
     lines = [message, '']
     for index, stock_name in enumerate(STOCK_CHOICES, start=1):
-        lines.append(f'[{index}] {stock_name}')
+        lines.append(f'[{index}] {format_stock_label(stock_name)}')
     lines.append('[0] Back')
     if allow_blank:
         lines.append('[G] Global fallback')
@@ -914,11 +957,11 @@ def print_stock_snapshot(data, stock_name):
     info = get_stock_info(data, stock_name)
     metrics = get_stock_price_metrics(data, stock_name)
 
-    lines = [f'Chosen stock: {stock_name}']
+    lines = [f'Chosen stock: {format_stock_label(stock_name)}']
     if info:
         lines.append(f'Info: {info}')
     else:
-        lines.append(f'Info: No saved info yet for {stock_name}.')
+        lines.append(f'Info: No saved info yet for {format_stock_label(stock_name)}.')
 
     if metrics:
         lines.append(f'Auto price: {format_php(metrics["unit_price"])}')
@@ -965,9 +1008,9 @@ def create_account_record(data, stock_name, account_name, link, email, password,
             'link': link,
             'email': email,
             'password': password,
-            'legacy_password_hash': '',
             'notes': notes,
             'fbfs': fbfs_value,
+            'updated_at': current_timestamp_text(),
         },
     )
 
@@ -1153,7 +1196,7 @@ def list_accounts(data):
         info = get_stock_info(data, stock_name)
         metrics = get_stock_price_metrics(data, stock_name)
 
-        line = f'- {account.get("code", key)} | {stock_name or "UNKNOWN"}'
+        line = f'- {account.get("code", key)} | {format_stock_label(stock_name)}'
         if account.get('name'):
             line += f' | name: {account["name"]}'
         if info:
@@ -1170,6 +1213,10 @@ def list_accounts(data):
             detail_parts.append(f'info: {info}')
         if account.get('email'):
             detail_parts.append(f'email: {account["email"]}')
+        if account.get('password'):
+            detail_parts.append(f'password: {account["password"]}')
+        if account.get('link'):
+            detail_parts.append(f'link: {account["link"]}')
         if detail_parts:
             lines.append('  ' + ' | '.join(detail_parts))
         lines.append('')
@@ -1201,11 +1248,10 @@ def show_account(data):
     info = get_stock_info(data, stock_name)
     metrics = get_stock_price_metrics(data, stock_name)
     password = account.get('password', '')
-    legacy_password_hash = account.get('legacy_password_hash', '')
 
     lines = [
         f'Code: {account.get("code", "no code")}',
-        f'Stock: {stock_name or "UNKNOWN"}',
+        f'Stock: {format_stock_label(stock_name)}',
         f'Name: {account.get("name") or "no name saved"}',
         f'Link: {account.get("link") or "no link saved"}',
         f'Email: {account.get("email")}',
@@ -1215,9 +1261,6 @@ def show_account(data):
     ]
     if password:
         lines.append(f'Password: {password}')
-    elif legacy_password_hash:
-        lines.append(f'Legacy password hash: {legacy_password_hash}')
-        lines.append('Password: old record still only has the previous hash')
     else:
         lines.append('Password: not saved')
 
@@ -1242,7 +1285,7 @@ def edit_account(data):
 
     preview_lines = [
         f'Code: {account.get("code", "no code")}',
-        f'Stock: {current_stock_name or "UNKNOWN"}',
+        f'Stock: {format_stock_label(current_stock_name)}',
         f'Name: {account.get("name") or "no name saved"}',
         f'Link: {account.get("link") or "no link saved"}',
         f'Email: {account.get("email") or "no email saved"}',
@@ -1284,12 +1327,11 @@ def edit_account(data):
             account[field_name] = updated_value
             changes.append(field_name)
 
-    if 'password' in changes and updated_password:
-        account['legacy_password_hash'] = ''
-
     if not changes:
         print_warning('No changes saved.')
         return
+
+    account['updated_at'] = current_timestamp_text()
 
     save_data(data)
 
@@ -1322,7 +1364,7 @@ def mark_account_sold(data):
 
     preview_lines = [
         f'Code: {account.get("code", "no code")}',
-        f'Stock: {stock_name or "UNKNOWN"}',
+        f'Stock: {format_stock_label(stock_name)}',
         f'Name: {account.get("name") or "no name saved"}',
         f'Email: {account.get("email")}',
         f'Current market price: {format_php(market_price_php) if market_price_php > 0 else "no market data"}',
@@ -1356,6 +1398,7 @@ def mark_account_sold(data):
             'price_difference_php': round(price_difference_php, 2),
             'price_difference_percent': round(price_difference_percent, 2),
             'pricing_source': pricing_source,
+            'updated_at': sold_at,
         }
     )
 
@@ -1398,7 +1441,7 @@ def show_sold_history(data):
     lines = []
     for account in sold_accounts:
         lines.append(
-            f'{account.get("code", "no code")} | {account.get("stock_name", "UNKNOWN")} | '
+            f'{account.get("code", "no code")} | {format_stock_label(account.get("stock_name", "UNKNOWN"))} | '
             f'{account.get("name") or "no name"} | sold {format_php(account.get("sold_price_php", 0.0))} | '
             f'{account.get("sold_at") or "no date"}'
         )
@@ -1441,12 +1484,14 @@ def show_market_state(data):
         sold_count = count_sold_accounts_for_stock(data, stock_name)
 
         if not state:
-            stock_lines.append(f'{stock_name} | in {inventory_count} | sold {sold_count} | no market samples yet')
+            stock_lines.append(
+                f'{format_stock_label(stock_name)} | in {inventory_count} | sold {sold_count} | no market samples yet'
+            )
             stock_lines.append('')
             continue
 
         stock_lines.append(
-            f'{stock_name} | in {inventory_count} | sold {sold_count} | samples {state["sample_count"]}'
+            f'{format_stock_label(stock_name)} | in {inventory_count} | sold {sold_count} | samples {state["sample_count"]}'
         )
         stock_lines.append(
             f'  latest: {format_php(state["latest_unit_price"])} on '
@@ -1596,11 +1641,11 @@ def print_sheets_setup_help(extra_message=''):
 
 
 def push_google_sheets_backup(data):
-    show_action_header('Push Local Data To Google Sheets', 'Copy your local MAUS JSON into a Google Sheets backup.')
+    show_action_header('Push Local Data To Google Sheets', 'Merge this device into your shared Google Sheets backup.')
 
     try:
         import sheets_sync
-        summary = sheets_sync.push_data_to_sheets(data)
+        merged_data, summary = sheets_sync.push_data_to_sheets(data)
     except ModuleNotFoundError:
         print_sheets_setup_help('Sheets sync module is missing.')
         return
@@ -1615,38 +1660,60 @@ def push_google_sheets_backup(data):
             print_error(f'Google Sheets push failed: {error}')
         return
 
+    try:
+        data.clear()
+        data.update(merged_data)
+        save_data(data)
+    except OSError as error:
+        print_panel(
+            'Sheets Push Partially Complete',
+            [
+                f'Spreadsheet updated: {summary["spreadsheet_title"]}',
+                'But this device could not save the merged local snapshot.',
+                f'Local save error: {error}',
+            ],
+            tone='bright_yellow',
+        )
+        return
+
     print_panel(
         'Sheets Push Complete',
         [
             f'Spreadsheet: {summary["spreadsheet_title"]}',
-            f'Active accounts pushed: {summary["active_account_count"]}',
-            f'Sold accounts pushed: {summary["sold_account_count"]}',
-            f'Market sample rows pushed: {summary["market_sample_count"]}',
-            f'Stock profiles pushed: {summary["stock_profile_count"]}',
+            f'Active accounts in merged backup: {summary["active_account_count"]}',
+            f'Sold accounts in merged backup: {summary["sold_account_count"]}',
+            f'Probable duplicates merged: {summary["duplicates_merged"]}',
+            f'Code collisions reassigned: {summary["code_collisions_resolved"]}',
+            f'Same-code account updates merged: {summary["same_code_updates"]}',
+            f'Sold state wins applied: {summary["sold_promotions"]}',
+            f'Ambiguous duplicates kept separate: {summary["ambiguous_duplicates"]}',
+            f'Market sample rows in backup: {summary["market_sample_count"]}',
+            'This device was also updated with the merged result.',
         ],
         tone='bright_green',
     )
 
 
 def pull_google_sheets_backup(data):
-    show_action_header('Pull Data From Google Sheets', 'Replace local JSON with the latest snapshot from your Google Sheets backup.')
+    show_action_header('Pull Data From Google Sheets', 'Merge your shared Google Sheets backup into this device.')
     print_panel(
-        'Pull Warning',
+        'Pull Merge Notice',
         [
-            'This replaces the current local data on this device.',
+            'This now merges Google Sheets with the current local data on this device.',
+            'If the same account exists on two devices, the sync will try to merge it instead of cloning it.',
             f'A safety backup will be saved first at: {PRE_SHEETS_PULL_BACKUP_FILE}',
         ],
         tone='bright_yellow',
     )
 
-    confirm = prompt_input('Replace local data using Google Sheets? (y/N): ', 'bright_yellow', 'bold').strip().lower()
+    confirm = prompt_input('Merge Google Sheets into local data? (y/N): ', 'bright_yellow', 'bold').strip().lower()
     if confirm != 'y':
         print_warning('Sheets pull canceled.')
         return
 
     try:
         import sheets_sync
-        pulled_data, summary = sheets_sync.pull_data_from_sheets()
+        pulled_data, summary = sheets_sync.pull_data_from_sheets(data)
     except ModuleNotFoundError:
         print_sheets_setup_help('Sheets sync module is missing.')
         return
@@ -1677,9 +1744,14 @@ def pull_google_sheets_backup(data):
         'Sheets Pull Complete',
         [
             f'Spreadsheet: {summary["spreadsheet_title"]}',
-            f'Active accounts loaded: {store_summary["inventory_count"]}',
-            f'Sold accounts loaded: {sales_summary["sold_count"]}',
-            f'Market sample rows loaded: {summary["market_sample_count"]}',
+            f'Active accounts after merge: {store_summary["inventory_count"]}',
+            f'Sold accounts after merge: {sales_summary["sold_count"]}',
+            f'Probable duplicates merged: {summary["duplicates_merged"]}',
+            f'Code collisions reassigned: {summary["code_collisions_resolved"]}',
+            f'Same-code account updates merged: {summary["same_code_updates"]}',
+            f'Sold state wins applied: {summary["sold_promotions"]}',
+            f'Ambiguous duplicates kept separate: {summary["ambiguous_duplicates"]}',
+            f'Market sample rows after merge: {summary["market_sample_count"]}',
             f'Safety backup saved at: {PRE_SHEETS_PULL_BACKUP_FILE}',
         ],
         tone='bright_green',
@@ -1700,13 +1772,17 @@ def delete_account(data):
         'Delete Preview',
         [
             f'Code: {code}',
-            f'Stock: {stock_name}',
+            f'Stock: {format_stock_label(stock_name)}',
             f'Name: {name}',
         ],
         tone='bright_yellow',
     )
 
-    confirm = prompt_input(f'Confirm delete {code} ({stock_name})? (y/N): ', 'bright_yellow', 'bold').strip().lower()
+    confirm = prompt_input(
+        f'Confirm delete {code} ({format_stock_label(stock_name)})? (y/N): ',
+        'bright_yellow',
+        'bold',
+    ).strip().lower()
     if confirm == 'y':
         del data['accounts'][code]
         save_data(data)

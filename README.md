@@ -52,7 +52,7 @@ Menu options:
 - 12: Import backup
 - 13: Delete account
 - 14: Push local data to Google Sheets
-- 15: Pull data from Google Sheets
+- 15: Pull and merge data from Google Sheets
 - 16: Exit
 
 ## Stock Choices
@@ -226,8 +226,11 @@ This branch adds backup/sync mode with Google Sheets while keeping local JSON as
 
 What it means:
 - local JSON is still your main live data
-- `Push` copies the current local data into Google Sheets
-- `Pull` restores local data from the latest Google Sheets snapshot
+- `Push` merges this device into the shared Google Sheet
+- `Pull` merges the shared Google Sheet into this device
+- Google Sheets writes full stock names like `REAL ACCOUNT` and `PREMIUM ACCOUNT` instead of short codes
+- if the same account shows up on two devices, sync now tries to merge it by email/link instead of cloning it
+- if two devices created different accounts with the same code, sync reassigns one code automatically to avoid overwriting
 
 Install the Sheets dependency:
 ```bash
@@ -263,8 +266,9 @@ Menu options:
 - `15) Pull data from Google Sheets`
 
 Safety note:
-- `Pull` replaces your local JSON with the spreadsheet snapshot
+- `Pull` no longer does a blind replace; it merges and deduplicates first
 - before pull, the app saves a local backup to `~/.termux_accounts.pre_sheets_pull_backup.json`
+- if sync cannot tell which duplicate is the real match because there are multiple candidates, it keeps both records and reports that as an ambiguous duplicate
 
 ## Move Data Between Phones
 Use these menu options for manual transfer:
@@ -292,5 +296,4 @@ termux-setup-storage
 
 ## Note
 This version stores passwords as plain text so you can view them later in Termux.
-
-Older records created in the previous version may still show a `legacy_password_hash` because hashes cannot be converted back into the original password. Re-save those accounts if you want the real password stored.
+The account list and fetch/view screens also show the saved password directly.
