@@ -9,16 +9,15 @@ import textwrap
 from datetime import datetime
 
 DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
-DEFAULT_EXPORT_FILE = os.path.expanduser('~/maus-account-backup.json')
-PRE_IMPORT_BACKUP_FILE = os.path.expanduser('~/.termux_accounts.pre_import_backup.json')
 PRE_SHEETS_PULL_BACKUP_FILE = os.path.expanduser('~/.termux_accounts.pre_sheets_pull_backup.json')
-STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP')
+STOCK_CHOICES = ('RA', 'PR', 'ON', 'MN', 'RP', 'SA')
 STOCK_FULL_NAMES = {
     'RA': 'REAL ACCOUNT',
     'PR': 'PREMIUM ACCOUNT',
     'ON': 'ONE NAME',
     'MN': 'MIX NAME',
     'RP': 'RPNORMS',
+    'SA': 'SELLER ACCOUNT',
 }
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
@@ -27,22 +26,17 @@ APP_TITLE = 'MAUS ACCOUNT TRACKER'
 APP_SUBTITLE = 'Phone-ready stock console'
 APP_OWNER = 'Owner codename: MAUS'
 MENU_OPTIONS = (
-    ('1', 'Paste/add account(s)', 'Bulk add one stock batch at a time'),
+    ('1', 'Add account', 'Bulk add one stock batch at a time'),
     ('2', 'List accounts', 'See every stored account and store value'),
-    ('3', 'View/fetch account', 'Open full details by code or name'),
-    ('4', 'Edit account', 'Update fbfs or other saved fields for active stock'),
-    ('5', 'Mark account as sold', 'Move stock out of inventory and log the sale'),
-    ('6', 'View sold history', 'Check sold price, market comparison, and date'),
-    ('7', 'Add market price sample', 'Feed auto-pricing with market data'),
-    ('8', 'Set stock info', 'Save notes for RA, PR, ON, MN, or RP'),
-    ('9', 'View market state', 'See the latest market condition per stock'),
-    ('10', 'View pricing summary', 'Review prices, samples, and totals'),
-    ('11', 'Export backup', 'Save your data to a transfer file'),
-    ('12', 'Import backup', 'Load data from another phone backup'),
-    ('13', 'Delete account', 'Remove a stock entry safely'),
-    ('14', 'Push local data to Google Sheets', 'Merge this device into your shared spreadsheet backup'),
-    ('15', 'Pull data from Google Sheets', 'Merge the shared spreadsheet backup into this device'),
-    ('16', 'Exit', 'Close the MAUS console'),
+    ('3', 'Get stock', 'Open full details by code or name'),
+    ('4', 'Manage account', 'Edit, sell, delete, or set stock info from one place'),
+    ('5', 'View sold history', 'Check sold price, market comparison, and date'),
+    ('6', 'Add market price sample', 'Feed auto-pricing with market data'),
+    ('7', 'View market state', 'See the latest market condition per stock'),
+    ('8', 'View pricing summary', 'Review prices, samples, and totals'),
+    ('9', 'Push local data to Google Sheets', 'Merge this device into your shared spreadsheet backup'),
+    ('10', 'Pull data from Google Sheets', 'Merge the shared spreadsheet backup into this device'),
+    ('11', 'Exit', 'Close the MAUS console'),
 )
 ANSI_CODES = {
     'reset': '\033[0m',
@@ -143,8 +137,17 @@ def print_panel(title, lines, tone='bright_blue'):
     print(style(border, tone))
 
     for raw_line in lines:
-        for segment in wrap_text(raw_line, inner_width):
-            print(f'| {segment.ljust(inner_width)} |')
+        line_text = raw_line
+        line_tones = ()
+        if isinstance(raw_line, (tuple, list)) and raw_line:
+            line_text = raw_line[0]
+            line_tones = tuple(raw_line[1:])
+
+        for segment in wrap_text(line_text, inner_width):
+            padded_segment = segment.ljust(inner_width)
+            if line_tones:
+                padded_segment = style(padded_segment, *line_tones)
+            print(f'| {padded_segment} |')
 
     print(style(border, tone))
 
@@ -783,6 +786,29 @@ def format_account_brief(data, account):
     return ' | '.join(parts)
 
 
+def format_inventory_stock_tag(stock_name):
+    normalized = normalize_stock_name(stock_name)
+    if normalized in STOCK_CHOICES:
+        return get_stock_full_name(normalized)
+    return get_stock_full_name(stock_name)
+
+
+def build_inventory_account_lines(data, account):
+    stock_name = account.get('stock_name', '')
+    metrics = get_stock_price_metrics(data, stock_name)
+    price_text = format_php(metrics['unit_price']) if metrics else 'no price yet'
+    price_tone = ('bold', 'bright_green') if metrics else ('bold', 'bright_yellow')
+
+    lines = [
+        (f'[{account.get("code", "NO-CODE")}]', 'bold', 'bright_cyan'),
+        (f'Tag: {format_inventory_stock_tag(stock_name)}', 'bold', 'bright_magenta'),
+        f'Name: {account.get("name") or "no name saved"}',
+        (f'Price: {price_text}', *price_tone),
+    ]
+
+    return lines
+
+
 def search_accounts(data, query):
     cleaned_query = query.strip()
     if not cleaned_query:
@@ -862,15 +888,16 @@ def get_store_value_summary(data):
     }
 
 
-def build_stock_overview_line(data):
-    segments = []
+def build_stock_overview_lines(data):
+    lines = []
     for stock_name in STOCK_CHOICES:
         inventory_count = count_accounts_for_stock(data, stock_name)
         sold_count = count_sold_accounts_for_stock(data, stock_name)
         metrics = get_stock_price_metrics(data, stock_name)
         price_text = format_php(metrics['unit_price']) if metrics else 'no price'
-        segments.append(f'{stock_name}({get_stock_full_name(stock_name)}) in {inventory_count} | sold {sold_count} | {price_text}')
-    return ' | '.join(segments)
+        line_tone = ('bold', 'bright_green') if metrics else ('bold', 'bright_yellow')
+        lines.append((f'{stock_name} | in {inventory_count} | sold {sold_count} | {price_text}', *line_tone))
+    return lines
 
 
 def show_dashboard(data):
@@ -886,8 +913,8 @@ def show_dashboard(data):
         f'Sold count: {sales_summary["sold_count"]} | Sold value: {format_php(sales_summary["total_sales_value"])}',
         '',
         'Stock overview:',
-        build_stock_overview_line(data),
     ]
+    lines.extend(build_stock_overview_lines(data))
     print_panel(APP_TITLE, lines, tone='bright_cyan')
 
 
@@ -908,6 +935,47 @@ def show_main_menu(data):
 def show_action_header(title, detail=''):
     lines = [detail] if detail else ['']
     print_panel(title, lines, tone='bright_magenta')
+
+
+def manage_account_menu(data):
+    show_action_header('Manage Account', 'Edit, sell, delete, or set stock info without crowding the main menu.')
+    lines = [
+        '[1] Edit account',
+        '    Update fbfs, password, notes, or other saved fields.',
+        '',
+        '[2] Mark account as sold',
+        '    Move an active account into sold history.',
+        '',
+        '[3] Set stock info',
+        '    Save notes for RA, PR, ON, MN, RP, or SA.',
+        '',
+        '[4] Delete account',
+        '    Remove a stock entry safely.',
+        '',
+        '[0] Back',
+    ]
+    print_panel('Manage Menu', lines, tone='bright_blue')
+
+    choice = prompt_input('Choose manage action: ').strip()
+    clear_screen()
+
+    if choice in ('0', 'B', 'BACK'):
+        print_warning('Back to main menu.')
+        return
+    if choice == '1':
+        edit_account(data)
+        return
+    if choice == '2':
+        mark_account_sold(data)
+        return
+    if choice == '3':
+        set_stock_info(data)
+        return
+    if choice == '4':
+        delete_account(data)
+        return
+
+    print_error('Invalid choice.')
 
 
 def prompt_positive_float(message):
@@ -1141,7 +1209,7 @@ def add_row_account(data, stock_name, row):
 
 
 def add_account(data):
-    show_action_header('Paste/Add Account(s)', 'Choose one stock, then paste one or many accounts into the batch.')
+    show_action_header('Add Account', 'Choose one stock, then paste one or many accounts into the batch.')
     stock_name = prompt_stock_choice('Choose stock name for the account(s):')
     if stock_name == BACK_ACTION:
         print_warning('Back to main menu.')
@@ -1265,33 +1333,7 @@ def list_accounts(data):
     lines = []
     for key in sorted(accounts.keys()):
         account = accounts[key]
-        stock_name = account.get('stock_name', '')
-        info = get_stock_info(data, stock_name)
-        metrics = get_stock_price_metrics(data, stock_name)
-
-        line = f'- {account.get("code", key)} | {format_stock_label(stock_name)}'
-        if account.get('name'):
-            line += f' | name: {account["name"]}'
-        if info:
-            line += f' | {info}'
-        line += f' | fbfs: {account.get("fbfs", 0)}'
-        if metrics:
-            line += f' -> {format_php(metrics["unit_price"])}'
-        else:
-            line += ' -> no price yet'
-        lines.append(line)
-
-        detail_parts = []
-        if info:
-            detail_parts.append(f'info: {info}')
-        if account.get('email'):
-            detail_parts.append(f'email: {account["email"]}')
-        if account.get('password'):
-            detail_parts.append(f'password: {account["password"]}')
-        if account.get('link'):
-            detail_parts.append(f'link: {account["link"]}')
-        if detail_parts:
-            lines.append('  ' + ' | '.join(detail_parts))
+        lines.extend(build_inventory_account_lines(data, account))
         lines.append('')
 
     if lines and not lines[-1]:
@@ -1312,7 +1354,7 @@ def list_accounts(data):
 
 
 def show_account(data):
-    show_action_header('View/Fetch Account', 'Search by account code, stock name, account name, or email.')
+    show_action_header('Get Stock', 'Search by account code, stock name, account name, or email.')
     account = pick_account(data, 'Enter account code or name to fetch: ')
     if not account:
         return
@@ -1610,87 +1652,6 @@ def show_market_state(data):
         global_lines.append('No global fallback market samples yet.')
 
     print_panel('Global Market State', global_lines, tone='bright_yellow')
-
-
-def export_backup(data):
-    show_action_header('Export Backup', 'Save your full MAUS data into one file so you can move it to another phone.')
-
-    export_path_input = prompt_input(
-        f'Export path (leave blank for {DEFAULT_EXPORT_FILE}): '
-    ).strip()
-    export_path = expand_user_path(export_path_input or DEFAULT_EXPORT_FILE)
-
-    try:
-        save_data_to_path(data, export_path)
-    except OSError as error:
-        print_error(f'Could not export backup: {error}')
-        return
-
-    print_panel(
-        'Backup Exported',
-        [
-            f'Backup saved to: {export_path}',
-            'Move this file to your other phone, then use Import backup there.',
-        ],
-        tone='bright_green',
-    )
-
-
-def import_backup(data):
-    show_action_header('Import Backup', 'Load a backup file from another phone and replace the current local data.')
-    print_panel(
-        'Import Warning',
-        [
-            'This replaces the current local data on this phone.',
-            f'A safety backup will be saved first at: {PRE_IMPORT_BACKUP_FILE}',
-        ],
-        tone='bright_yellow',
-    )
-
-    import_path_input = prompt_input(
-        f'Import path (leave blank for {DEFAULT_EXPORT_FILE}): '
-    ).strip()
-    import_path = expand_user_path(import_path_input or DEFAULT_EXPORT_FILE)
-
-    if not os.path.exists(import_path):
-        print_error(f'Backup file not found: {import_path}')
-        return
-
-    try:
-        imported_data = load_data_from_path(import_path)
-    except json.JSONDecodeError:
-        print_error('That backup file is not valid JSON.')
-        return
-    except OSError as error:
-        print_error(f'Could not read backup file: {error}')
-        return
-
-    confirm = prompt_input('Replace current local data with this backup? (y/N): ', 'bright_yellow', 'bold').strip().lower()
-    if confirm != 'y':
-        print_warning('Import canceled.')
-        return
-
-    try:
-        if os.path.exists(DATA_FILE):
-            save_data_to_path(data, PRE_IMPORT_BACKUP_FILE)
-        data.clear()
-        data.update(imported_data)
-        save_data(data)
-    except OSError as error:
-        print_error(f'Import failed: {error}')
-        return
-
-    store_summary = get_store_value_summary(data)
-    sales_summary = get_sales_summary(data)
-    print_panel(
-        'Import Complete',
-        [
-            f'Imported active accounts: {store_summary["inventory_count"]}',
-            f'Imported sold accounts: {sales_summary["sold_count"]}',
-            f'Safety backup saved at: {PRE_IMPORT_BACKUP_FILE}',
-        ],
-        tone='bright_green',
-    )
 
 
 def print_sheets_setup_help(extra_message=''):
@@ -2033,42 +1994,27 @@ def main():
             show_account(data)
             pause_for_continue()
         elif choice == '4':
-            edit_account(data)
+            manage_account_menu(data)
             pause_for_continue()
         elif choice == '5':
-            mark_account_sold(data)
-            pause_for_continue()
-        elif choice == '6':
             show_sold_history(data)
             pause_for_continue()
-        elif choice == '7':
+        elif choice == '6':
             add_market_sample(data)
             pause_for_continue()
-        elif choice == '8':
-            set_stock_info(data)
-            pause_for_continue()
-        elif choice == '9':
+        elif choice == '7':
             show_market_state(data)
             pause_for_continue()
-        elif choice == '10':
+        elif choice == '8':
             show_pricing_summary(data)
             pause_for_continue()
-        elif choice == '11':
-            export_backup(data)
-            pause_for_continue()
-        elif choice == '12':
-            import_backup(data)
-            pause_for_continue()
-        elif choice == '13':
-            delete_account(data)
-            pause_for_continue()
-        elif choice == '14':
+        elif choice == '9':
             push_google_sheets_backup(data)
             pause_for_continue()
-        elif choice == '15':
+        elif choice == '10':
             pull_google_sheets_backup(data)
             pause_for_continue()
-        elif choice == '16':
+        elif choice == '11':
             print_panel('Exit', ['MAUS console closed.'], tone='bright_cyan')
             break
         else:
