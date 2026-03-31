@@ -364,6 +364,30 @@ def normalize_account_field_label(value):
     return ''.join(character for character in str(value).lower() if character.isalnum())
 
 
+def build_parse_metadata(parse_mode):
+    return {
+        'parse_mode': parse_mode,
+        'used_guess': False,
+        'confidence': 'high',
+        'guessed_fields': [],
+    }
+
+
+def lower_parse_confidence(parse_meta, candidate):
+    ranks = {'high': 0, 'medium': 1, 'low': 2}
+    current_rank = ranks.get(parse_meta.get('confidence', 'high'), 0)
+    candidate_rank = ranks.get(candidate, 0)
+    if candidate_rank > current_rank:
+        parse_meta['confidence'] = candidate
+
+
+def mark_guessed_field(parse_meta, field_name, confidence='medium'):
+    parse_meta['used_guess'] = True
+    if field_name not in parse_meta['guessed_fields']:
+        parse_meta['guessed_fields'].append(field_name)
+    lower_parse_confidence(parse_meta, confidence)
+
+
 def parse_labeled_account_part(value):
     text = str(value).strip()
     if not text:
@@ -455,10 +479,119 @@ def clean_detected_account_value(field_name, value):
     return text
 
 
+def looks_like_plain_name_text(value):
+    text = clean_detected_account_value('name', value)
+    if not text or looks_like_email(text) or looks_like_link(text) or looks_like_fbfs(text):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z .,'-]*", text))
+
+
+def score_password_candidate(value):
+    text = clean_detected_account_value('password', value)
+    if not text or looks_like_email(text) or looks_like_link(text) or looks_like_fbfs(text):
+        return -999
+
+    score = 0
+    if ' ' not in text:
+        score += 4
+    else:
+        score -= 2
+    if any(character.islower() for character in text) and any(character.isupper() for character in text):
+        score += 2
+    if any(character.isdigit() for character in text):
+        score += 2
+    if any(not character.isalnum() for character in text):
+        score += 2
+    if len(text) >= 6:
+        score += 1
+    if re.fullmatch(r"[A-Za-z .,'-]+", text):
+        score -= 3
+    if re.search(r'\b(followers?|girls?|girl|names?|stock|clean|main|old|new|note|notes|pede)\b', text, re.IGNORECASE):
+        score -= 2
+    return score
+
+
+def score_name_candidate(value):
+    text = clean_detected_account_value('name', value)
+    if not text or looks_like_email(text) or looks_like_link(text) or looks_like_fbfs(text):
+        return -999
+
+    score = 0
+    if ' ' in text:
+        score += 4
+    if re.fullmatch(r"[A-Za-z][A-Za-z .,'-]*", text):
+        score += 3
+    if sum(character.isalpha() for character in text) >= max(3, len(text) // 2):
+        score += 1
+    if any(character.isdigit() for character in text):
+        score -= 3
+    if any(character in '@#!$%^&*_=+/' for character in text):
+        score -= 3
+    if re.search(r'\b(followers?|girls?|girl|names?|stock|clean|main|old|new|note|notes|pede)\b', text, re.IGNORECASE):
+        score -= 2
+    return score
+
+
+def pop_best_scored_part(parts, scorer):
+    best_index = None
+    best_score = None
+    second_score = None
+
+    for index, value in enumerate(parts):
+        score = scorer(value)
+        if best_score is None or score > best_score:
+            second_score = best_score
+            best_index = index
+            best_score = score
+        elif second_score is None or score > second_score:
+            second_score = score
+
+    if best_index is None:
+        return '', None, None
+
+    return parts.pop(best_index), best_score, second_score
+
+
+def try_parse_ordered_account_parts(parts):
+    cleaned_parts = [str(part).strip() for part in parts]
+    if len(cleaned_parts) == 4:
+        name, email, password, fbfs = cleaned_parts
+        if looks_like_plain_name_text(name) and looks_like_email(email) and password and looks_like_fbfs(fbfs):
+            return (
+                {
+                    'name': clean_detected_account_value('name', name),
+                    'link': '',
+                    'email': clean_detected_account_value('email', email),
+                    'password': clean_detected_account_value('password', password),
+                    'fbfs': clean_detected_account_value('fbfs', fbfs),
+                    'notes': '',
+                },
+                build_parse_metadata('ordered'),
+            )
+
+    if len(cleaned_parts) == 6:
+        name, link, email, password, fbfs, notes = cleaned_parts
+        link_is_valid = not normalize_optional_text(link) or looks_like_link(link)
+        if looks_like_plain_name_text(name) and link_is_valid and looks_like_email(email) and password and looks_like_fbfs(fbfs):
+            return (
+                {
+                    'name': clean_detected_account_value('name', name),
+                    'link': clean_detected_account_value('link', normalize_optional_text(link)),
+                    'email': clean_detected_account_value('email', email),
+                    'password': clean_detected_account_value('password', password),
+                    'fbfs': clean_detected_account_value('fbfs', fbfs),
+                    'notes': clean_detected_account_value('notes', normalize_optional_text(notes)),
+                },
+                build_parse_metadata('ordered'),
+            )
+
+    return None, None
+
+
 def parse_flexible_account_parts(parts):
     stripped_parts = [str(part).strip() for part in parts if str(part).strip()]
     if len(stripped_parts) < 4:
-        return None, 'Need at least name, email, password, and fbfs.'
+        return None, None, 'Need at least name, email, password, and fbfs.'
 
     row = {
         'name': '',
@@ -468,6 +601,7 @@ def parse_flexible_account_parts(parts):
         'fbfs': '',
         'notes': '',
     }
+    parse_meta = build_parse_metadata('flex')
     leftovers = []
 
     for part in stripped_parts:
@@ -487,13 +621,38 @@ def parse_flexible_account_parts(parts):
             row['fbfs'] = clean_detected_account_value('fbfs', detected_fbfs)
 
     if not row['name']:
-        row['name'] = clean_detected_account_value('name', pop_best_name_part(leftovers))
+        guessed_name, name_score, second_name_score = pop_best_scored_part(leftovers, score_name_candidate)
+        if guessed_name:
+            row['name'] = clean_detected_account_value('name', guessed_name)
+            guessed_name_confidence = 'medium'
+            if (name_score is not None and name_score < 3) or (
+                second_name_score is not None and name_score is not None and name_score <= second_name_score + 1
+            ):
+                guessed_name_confidence = 'low'
+            mark_guessed_field(parse_meta, 'name', guessed_name_confidence)
     if not row['password']:
-        row['password'] = clean_detected_account_value('password', pop_best_password_part(leftovers))
+        guessed_password, password_score, second_password_score = pop_best_scored_part(leftovers, score_password_candidate)
+        if guessed_password:
+            row['password'] = clean_detected_account_value('password', guessed_password)
+            guessed_password_confidence = 'medium'
+            if (password_score is not None and password_score < 4) or (
+                second_password_score is not None and password_score is not None and password_score <= second_password_score + 1
+            ):
+                guessed_password_confidence = 'low'
+            mark_guessed_field(parse_meta, 'password', guessed_password_confidence)
     if not row['notes'] and leftovers:
         row['notes'] = ' | '.join(clean_detected_account_value('notes', part) for part in leftovers if str(part).strip())
+        if row['notes']:
+            mark_guessed_field(parse_meta, 'notes', 'medium')
 
-    return row, None
+    return row, parse_meta, None
+
+
+def parse_account_parts(parts):
+    ordered_row, ordered_meta = try_parse_ordered_account_parts(parts)
+    if ordered_row is not None:
+        return ordered_row, ordered_meta, None
+    return parse_flexible_account_parts(parts)
 
 
 def normalize_non_negative_int(value, default=0):
@@ -1106,18 +1265,25 @@ def pick_account(data, prompt_message, empty_message='No matching account found.
     return data['accounts'][chosen_code]
 
 
-def get_store_value_summary(data):
+def get_store_value_summary(data, accounts=None):
+    if accounts is None:
+        account_list = list(data['accounts'].values())
+    elif isinstance(accounts, dict):
+        account_list = list(accounts.values())
+    else:
+        account_list = list(accounts)
+
     total_value = 0.0
     priced_accounts = 0
 
-    for account in data['accounts'].values():
+    for account in account_list:
         metrics = get_stock_price_metrics(data, account.get('stock_name', ''))
         if not metrics:
             continue
         total_value += metrics['unit_price']
         priced_accounts += 1
 
-    inventory_count = len(data['accounts'])
+    inventory_count = len(account_list)
     return {
         'inventory_count': inventory_count,
         'priced_accounts': priced_accounts,
@@ -1338,6 +1504,29 @@ def prompt_stock_choice(message, allow_blank=False):
     return stock_name
 
 
+def prompt_list_stock_filter():
+    lines = ['Choose which stock to show.', '']
+    lines.append('[A] All stocks')
+    for index, stock_name in enumerate(STOCK_CHOICES, start=1):
+        lines.append(f'[{index}] {format_stock_label(stock_name)}')
+    lines.append('[0] Back')
+
+    print_panel('List Filter', lines, tone='bright_blue')
+
+    raw_value = prompt_input('Show which stock? ').strip().upper()
+    if raw_value in ('0', 'B', 'BACK'):
+        return BACK_ACTION
+    if raw_value in ('', 'A', 'ALL'):
+        return ''
+
+    stock_name = parse_stock_choice(raw_value)
+    if stock_name not in STOCK_CHOICES:
+        print_error(f'Invalid stock name. Use one of {", ".join(STOCK_CHOICES)}.')
+        return None
+
+    return stock_name
+
+
 def print_stock_snapshot(data, stock_name):
     info = get_stock_info(data, stock_name)
     metrics = get_stock_price_metrics(data, stock_name)
@@ -1402,14 +1591,37 @@ def create_account_record(data, stock_name, account_name, link, email, password,
 
 def parse_row_account_line(line):
     parts = [part.strip() for part in line.split('|')]
-    return parse_flexible_account_parts(parts)
+    return parse_account_parts(parts)
 
 
 def parse_multiline_account_block(lines):
-    return parse_flexible_account_parts(lines)
+    return parse_account_parts(lines)
 
 
-def add_row_account(data, stock_name, row):
+def show_parsed_account_preview(row, parse_meta):
+    lines = [
+        ('Parser Review', 'bold', 'bright_yellow'),
+        format_detail_line('Mode', parse_meta.get('parse_mode', 'flex').upper()),
+        format_detail_line('Confidence', parse_meta.get('confidence', 'high').upper()),
+        format_detail_line('Guessed', ', '.join(parse_meta.get('guessed_fields', [])) or 'none'),
+        SECTION_BREAK,
+        format_detail_line('Name', format_current_value(row.get('name'))),
+        format_detail_line('Email', format_current_value(row.get('email'))),
+        format_detail_line('Password', format_current_value(row.get('password'))),
+        format_detail_line('fbfs', format_current_value(row.get('fbfs'))),
+        format_detail_line('Link', format_current_value(row.get('link'))),
+        format_detail_line('Notes', format_current_value(row.get('notes'))),
+    ]
+    print_panel('Confirm Parsed Account', lines, tone='bright_yellow')
+
+
+def confirm_guessed_account(row, parse_meta):
+    show_parsed_account_preview(row, parse_meta)
+    confirm = prompt_input('Save this parsed account? (y/N): ', 'bright_yellow', 'bold').strip().lower()
+    return confirm == 'y'
+
+
+def add_row_account(data, stock_name, row, parse_meta=None):
     code, record_or_error = create_account_record(
         data,
         stock_name,
@@ -1421,8 +1633,15 @@ def add_row_account(data, stock_name, row):
         row['notes'],
     )
     if code is None:
+        if parse_meta and parse_meta.get('used_guess'):
+            show_parsed_account_preview(row, parse_meta)
         print_error(record_or_error)
         return None
+
+    if parse_meta and parse_meta.get('used_guess'):
+        if not confirm_guessed_account(record_or_error, parse_meta):
+            print_warning('Skipped parsed account. Add labels if you want exact mapping.')
+            return None
 
     data['accounts'][code] = record_or_error
     metrics = get_stock_price_metrics(data, record_or_error['stock_name'])
@@ -1471,11 +1690,11 @@ def add_account(data):
 
         if stripped.upper() == 'DONE':
             if multiline_buffer:
-                row, error = parse_multiline_account_block(multiline_buffer)
+                row, parse_meta, error = parse_multiline_account_block(multiline_buffer)
                 if error:
                     print_error(error)
                 else:
-                    code = add_row_account(data, stock_name, row)
+                    code = add_row_account(data, stock_name, row, parse_meta)
                     if code:
                         added_codes.append(code)
             break
@@ -1485,12 +1704,12 @@ def add_account(data):
                 print_warning('Finish the current multiline block first or type DONE.')
                 continue
 
-            row, error = parse_row_account_line(line)
+            row, parse_meta, error = parse_row_account_line(line)
             if error:
                 print_error(error)
                 continue
 
-            code = add_row_account(data, stock_name, row)
+            code = add_row_account(data, stock_name, row, parse_meta)
             if code:
                 added_codes.append(code)
             continue
@@ -1499,14 +1718,14 @@ def add_account(data):
             if not multiline_buffer:
                 continue
 
-            row, error = parse_multiline_account_block(multiline_buffer)
+            row, parse_meta, error = parse_multiline_account_block(multiline_buffer)
             if error:
                 print_warning(
                     f'Could not detect that block yet ({len(multiline_buffer)} line(s)). '
                     'Make sure it includes name, email, password, and fbfs.'
                 )
             else:
-                code = add_row_account(data, stock_name, row)
+                code = add_row_account(data, stock_name, row, parse_meta)
                 if code:
                     added_codes.append(code)
                 multiline_buffer = []
@@ -1514,11 +1733,11 @@ def add_account(data):
 
         multiline_buffer.append(line)
         if len(multiline_buffer) == 6:
-            row, error = parse_multiline_account_block(multiline_buffer)
+            row, parse_meta, error = parse_multiline_account_block(multiline_buffer)
             if error:
                 print_error(error)
             else:
-                code = add_row_account(data, stock_name, row)
+                code = add_row_account(data, stock_name, row, parse_meta)
                 if code:
                     added_codes.append(code)
             multiline_buffer = []
@@ -1545,20 +1764,40 @@ def list_accounts(data):
         print_warning('No accounts stored.')
         return
 
-    lines = []
-    for key in sorted(accounts.keys()):
-        account = accounts[key]
-        lines.extend(build_inventory_account_lines(data, account))
-        lines.append('')
+    stock_filter = prompt_list_stock_filter()
+    if stock_filter == BACK_ACTION:
+        print_warning('Back to main menu.')
+        return
+    if stock_filter is None:
+        return
 
-    if lines and not lines[-1]:
+    filtered_accounts = [
+        account
+        for key, account in sorted(accounts.items())
+        if not stock_filter or account.get('stock_name') == stock_filter
+    ]
+    if not filtered_accounts:
+        if stock_filter:
+            print_warning(f'No stored accounts for {format_stock_label(stock_filter)}.')
+        else:
+            print_warning('No accounts stored.')
+        return
+
+    lines = []
+    for account in filtered_accounts:
+        lines.extend(build_inventory_account_lines(data, account))
+    if lines and lines[-1] == SECTION_BREAK:
         lines.pop()
 
-    store_summary = get_store_value_summary(data)
-    print_panel('Inventory', lines, tone='bright_blue')
+    store_summary = get_store_value_summary(data, filtered_accounts)
+    inventory_title = 'Inventory'
+    if stock_filter:
+        inventory_title = f'Inventory - {stock_filter}'
+    print_panel(inventory_title, lines, tone='bright_blue')
     print_panel(
         'Store Summary',
         [
+            format_detail_line('Filter', format_stock_label(stock_filter) if stock_filter else 'ALL STOCKS'),
             f'Accounts in inventory: {store_summary["inventory_count"]}',
             f'Accounts with price: {store_summary["priced_accounts"]}',
             f'Accounts without price: {store_summary["unpriced_accounts"]}',

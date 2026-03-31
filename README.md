@@ -9,7 +9,7 @@ python3 account_manager.py
 
 Windows:
 ```powershell
-cd C:\Users\Tanio\Account
+cd C:\Users\User\Account
 python account_manager.py
 ```
 
