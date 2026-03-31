@@ -22,6 +22,7 @@ STOCK_FULL_NAMES = {
 ACCOUNT_CODE_PREFIX = 'ACC-'
 ACCOUNT_CODE_DIGITS = 4
 BACK_ACTION = '__BACK__'
+SECTION_BREAK = '__SECTION_BREAK__'
 APP_TITLE = 'MAUS ACCOUNT TRACKER'
 APP_SUBTITLE = 'Phone-ready stock console'
 APP_OWNER = 'Owner codename: MAUS'
@@ -126,15 +127,33 @@ def prompt_input(message, *tone):
     return input(prompt)
 
 
+def section_rule(character='.'):
+    width = min(terminal_width(), 44)
+    return character * width
+
+
+def format_detail_line(label, value, label_width=11):
+    cleaned_label = str(label).strip().upper()
+    return f'{cleaned_label:<{label_width}} {value}'
+
+
+def panel_line_prefix(text):
+    raw_text = str(text)
+    stripped_text = raw_text.lstrip()
+    if not stripped_text:
+        return ''
+    if raw_text.startswith(' ') or stripped_text.startswith('['):
+        return ''
+    return '  '
+
+
 def print_panel(title, lines, tone='bright_blue'):
     width = terminal_width()
-    border = '+' + ('-' * (width - 2)) + '+'
-    inner_width = width - 4
-    title_text = f' {title[:inner_width]} '
+    divider_length = min(width, max(24, len(title) + 8))
 
-    print(style(border, tone))
-    print(style(f'| {title_text.ljust(inner_width)} |', 'bold', tone))
-    print(style(border, tone))
+    print()
+    print(style(f':: {title}', 'bold', tone))
+    print(style('-' * divider_length, 'dim', tone))
 
     for raw_line in lines:
         line_text = raw_line
@@ -143,13 +162,23 @@ def print_panel(title, lines, tone='bright_blue'):
             line_text = raw_line[0]
             line_tones = tuple(raw_line[1:])
 
-        for segment in wrap_text(line_text, inner_width):
-            padded_segment = segment.ljust(inner_width)
-            if line_tones:
-                padded_segment = style(padded_segment, *line_tones)
-            print(f'| {padded_segment} |')
+        if line_text == SECTION_BREAK:
+            print(style(section_rule(), 'dim', tone))
+            continue
 
-    print(style(border, tone))
+        prefix = panel_line_prefix(line_text)
+        wrap_width = max(10, width - len(prefix))
+        wrapped_segments = wrap_text(line_text, wrap_width)
+        if not wrapped_segments:
+            print()
+            continue
+
+        for segment in wrapped_segments:
+            if line_tones:
+                segment = style(segment, *line_tones)
+            print(f'{prefix}{segment}')
+
+    print()
 
 
 def pause_for_continue():
@@ -800,10 +829,10 @@ def build_inventory_account_lines(data, account):
     price_tone = ('bold', 'bright_green') if metrics else ('bold', 'bright_yellow')
 
     lines = [
-        (f'[{account.get("code", "NO-CODE")}]', 'bold', 'bright_cyan'),
-        (f'Tag: {format_inventory_stock_tag(stock_name)}', 'bold', 'bright_magenta'),
-        f'Name: {account.get("name") or "no name saved"}',
-        (f'Price: {price_text}', *price_tone),
+        (f'[{account.get("code", "NO-CODE")}]  {format_inventory_stock_tag(stock_name)}', 'bold', 'bright_cyan'),
+        format_detail_line('Name', account.get('name') or 'no name saved'),
+        (format_detail_line('Price', price_text), *price_tone),
+        SECTION_BREAK,
     ]
 
     return lines
@@ -896,7 +925,26 @@ def build_stock_overview_lines(data):
         metrics = get_stock_price_metrics(data, stock_name)
         price_text = format_php(metrics['unit_price']) if metrics else 'no price'
         line_tone = ('bold', 'bright_green') if metrics else ('bold', 'bright_yellow')
-        lines.append((f'{stock_name} | in {inventory_count} | sold {sold_count} | {price_text}', *line_tone))
+        lines.append((f'[{stock_name}]', 'bold', 'bright_cyan'))
+        lines.append((format_detail_line('In stock', inventory_count), 'white'))
+        lines.append((format_detail_line('Sold', sold_count), 'bright_black'))
+        lines.append((format_detail_line('Price', price_text), *line_tone))
+        lines.append(SECTION_BREAK)
+
+    if lines and lines[-1] == SECTION_BREAK:
+        lines.pop()
+    return lines
+
+
+def build_menu_lines(options, accent_tone='bright_cyan'):
+    lines = []
+    for key, label, description in options:
+        lines.append((f'[{key}] {label}', 'bold', accent_tone))
+        lines.append((f'    {description}', 'bright_black'))
+        lines.append('')
+
+    if lines and not lines[-1]:
+        lines.pop()
     return lines
 
 
@@ -904,15 +952,16 @@ def show_dashboard(data):
     store_summary = get_store_value_summary(data)
     sales_summary = get_sales_summary(data)
     lines = [
-        APP_OWNER,
-        APP_SUBTITLE,
-        '',
-        f'Inventory: {store_summary["inventory_count"]} account(s)',
-        f'Priced: {store_summary["priced_accounts"]} | Unpriced: {store_summary["unpriced_accounts"]}',
-        f'Estimated store value: {format_php(store_summary["inventory_value"])}',
-        f'Sold count: {sales_summary["sold_count"]} | Sold value: {format_php(sales_summary["total_sales_value"])}',
-        '',
-        'Stock overview:',
+        (APP_OWNER, 'bright_magenta'),
+        (APP_SUBTITLE, 'bright_black'),
+        SECTION_BREAK,
+        (format_detail_line('Inventory', f'{store_summary["inventory_count"]} account(s)'), 'bold', 'white'),
+        (format_detail_line('Priced', store_summary["priced_accounts"]), 'bright_black'),
+        (format_detail_line('Unpriced', store_summary["unpriced_accounts"]), 'bright_black'),
+        (format_detail_line('Store value', format_php(store_summary["inventory_value"])), 'bold', 'bright_green'),
+        (format_detail_line('Sold value', format_php(sales_summary["total_sales_value"])), 'bold', 'bright_yellow'),
+        SECTION_BREAK,
+        ('Stock overview', 'bold', 'bright_cyan'),
     ]
     lines.extend(build_stock_overview_lines(data))
     print_panel(APP_TITLE, lines, tone='bright_cyan')
@@ -921,15 +970,7 @@ def show_dashboard(data):
 def show_main_menu(data):
     clear_screen()
     show_dashboard(data)
-
-    menu_lines = []
-    for key, label, description in MENU_OPTIONS:
-        menu_lines.append(f'[{key}] {label}')
-        menu_lines.append(f'    {description}')
-        if key != MENU_OPTIONS[-1][0]:
-            menu_lines.append('')
-
-    print_panel('Main Menu', menu_lines, tone='bright_blue')
+    print_panel('Main Menu', build_menu_lines(MENU_OPTIONS), tone='bright_blue')
 
 
 def show_action_header(title, detail=''):
@@ -939,21 +980,15 @@ def show_action_header(title, detail=''):
 
 def manage_account_menu(data):
     show_action_header('Manage Account', 'Edit, sell, delete, or set stock info without crowding the main menu.')
-    lines = [
-        '[1] Edit account',
-        '    Update fbfs, password, notes, or other saved fields.',
-        '',
-        '[2] Mark account as sold',
-        '    Move an active account into sold history.',
-        '',
-        '[3] Set stock info',
-        '    Save notes for RA, PR, ON, MN, RP, or SA.',
-        '',
-        '[4] Delete account',
-        '    Remove a stock entry safely.',
-        '',
-        '[0] Back',
-    ]
+    lines = build_menu_lines(
+        (
+            ('1', 'Edit account', 'Update fbfs, password, notes, or other saved fields.'),
+            ('2', 'Mark account as sold', 'Move an active account into sold history.'),
+            ('3', 'Set stock info', 'Save notes for RA, PR, ON, MN, RP, or SA.'),
+            ('4', 'Delete account', 'Remove a stock entry safely.'),
+            ('0', 'Back', 'Return to the main menu.'),
+        )
+    )
     print_panel('Manage Menu', lines, tone='bright_blue')
 
     choice = prompt_input('Choose manage action: ').strip()
@@ -1365,25 +1400,37 @@ def show_account(data):
     password = account.get('password', '')
 
     lines = [
-        f'Code: {account.get("code", "no code")}',
-        f'Stock: {format_stock_label(stock_name)}',
-        f'Name: {account.get("name") or "no name saved"}',
-        f'Link: {account.get("link") or "no link saved"}',
-        f'Email: {account.get("email")}',
-        f'Stock info: {info or "no saved info"}',
-        f'fbfs: {account.get("fbfs", 0)}',
-        f'Notes: {account.get("notes") or "no notes"}',
+        ('Identity', 'bold', 'bright_cyan'),
+        format_detail_line('Code', account.get("code", "no code")),
+        format_detail_line('Stock', format_stock_label(stock_name)),
+        format_detail_line('Name', account.get("name") or "no name saved"),
+        SECTION_BREAK,
+        ('Access', 'bold', 'bright_magenta'),
+        format_detail_line('Email', account.get("email")),
+        format_detail_line('Link', account.get("link") or "no link saved"),
     ]
     if password:
-        lines.append(f'Password: {password}')
+        lines.append((format_detail_line('Password', password), 'bold', 'bright_yellow'))
     else:
-        lines.append('Password: not saved')
+        lines.append((format_detail_line('Password', 'not saved'), 'bright_black'))
+
+    lines.extend(
+        [
+            SECTION_BREAK,
+            ('Notes', 'bold', 'bright_cyan'),
+            format_detail_line('fbfs', account.get("fbfs", 0)),
+            format_detail_line('Stock info', info or "no saved info"),
+            format_detail_line('Notes', account.get("notes") or "no notes"),
+            SECTION_BREAK,
+            ('Pricing', 'bold', 'bright_green'),
+        ]
+    )
 
     if metrics:
-        lines.append(f'Estimated price: {format_php(metrics["unit_price"])}')
-        lines.append(f'Pricing source: {metrics["source"]}')
+        lines.append((format_detail_line('Price', format_php(metrics["unit_price"])), 'bold', 'bright_green'))
+        lines.append(format_detail_line('Source', metrics["source"]))
     else:
-        lines.append('Estimated price: no market data')
+        lines.append((format_detail_line('Price', 'no market data'), 'bold', 'bright_yellow'))
 
     print_panel(f'Account {account.get("code", "NO-CODE")}', lines, tone='bright_green')
 
@@ -1556,22 +1603,33 @@ def show_sold_history(data):
     lines = []
     for account in sold_accounts:
         lines.append(
-            f'{account.get("code", "no code")} | {format_stock_label(account.get("stock_name", "UNKNOWN"))} | '
-            f'{account.get("name") or "no name"} | sold {format_php(account.get("sold_price_php", 0.0))} | '
-            f'{account.get("sold_at") or "no date"}'
+            (
+                f'[{account.get("code", "no code")}]  {account.get("name") or "no name"}',
+                'bold',
+                'bright_cyan',
+            )
         )
+        lines.append(format_detail_line('Stock', format_stock_label(account.get("stock_name", "UNKNOWN"))))
+        lines.append((format_detail_line('Sold', format_php(account.get("sold_price_php", 0.0))), 'bold', 'bright_green'))
+        lines.append(format_detail_line('When', account.get("sold_at") or "no date"))
 
-        detail_parts = [describe_sale_vs_market(account)]
+        comparison_text = describe_sale_vs_market(account)
+        comparison_tone = ('bright_yellow',)
+        if comparison_text.startswith('Above market'):
+            comparison_tone = ('bright_green',)
+        elif comparison_text.startswith('Below market'):
+            comparison_tone = ('bright_red',)
+        lines.append((comparison_text, *comparison_tone))
+
         if account.get('market_price_php', 0.0) > 0:
-            detail_parts.append(f'market {format_php(account["market_price_php"])}')
+            lines.append(format_detail_line('Market', format_php(account["market_price_php"])))
         if account.get('pricing_source'):
-            detail_parts.append(f'source: {account["pricing_source"]}')
+            lines.append(format_detail_line('Source', account["pricing_source"]))
         if account.get('sold_note'):
-            detail_parts.append(f'note: {account["sold_note"]}')
-        lines.append('  ' + ' | '.join(detail_parts))
-        lines.append('')
+            lines.append(format_detail_line('Note', account["sold_note"]))
+        lines.append(SECTION_BREAK)
 
-    if lines and not lines[-1]:
+    if lines and lines[-1] == SECTION_BREAK:
         lines.pop()
 
     print_panel('Sold Accounts', lines, tone='bright_blue')
@@ -1599,34 +1657,55 @@ def show_market_state(data):
         sold_count = count_sold_accounts_for_stock(data, stock_name)
 
         if not state:
-            stock_lines.append(
-                f'{format_stock_label(stock_name)} | in {inventory_count} | sold {sold_count} | no market samples yet'
-            )
-            stock_lines.append('')
+            stock_lines.append((f'[{stock_name}]  {get_stock_full_name(stock_name)}', 'bold', 'bright_cyan'))
+            stock_lines.append(format_detail_line('In stock', inventory_count))
+            stock_lines.append(format_detail_line('Sold', sold_count))
+            stock_lines.append((format_detail_line('Price', 'no market samples yet'), 'bold', 'bright_yellow'))
+            stock_lines.append(SECTION_BREAK)
             continue
 
+        stock_lines.append((f'[{stock_name}]  {get_stock_full_name(stock_name)}', 'bold', 'bright_cyan'))
+        stock_lines.append(format_detail_line('In stock', inventory_count))
+        stock_lines.append(format_detail_line('Sold', sold_count))
+        stock_lines.append(format_detail_line('Samples', state["sample_count"]))
         stock_lines.append(
-            f'{format_stock_label(stock_name)} | in {inventory_count} | sold {sold_count} | samples {state["sample_count"]}'
-        )
-        stock_lines.append(
-            f'  latest: {format_php(state["latest_unit_price"])} on '
-            f'{state["latest_recorded_at"] or "unknown time"}'
+            (
+                format_detail_line(
+                    'Latest',
+                    f'{format_php(state["latest_unit_price"])} on {state["latest_recorded_at"] or "unknown time"}',
+                ),
+                'bold',
+                'bright_green',
+            )
         )
         if state['movement_php'] is None:
-            stock_lines.append('  trend: not enough data yet')
+            stock_lines.append((format_detail_line('Trend', 'not enough data yet'), 'bright_black'))
         else:
+            movement_tone = 'bright_yellow'
+            if state["movement_php"] > 0:
+                movement_tone = 'bright_green'
+            elif state["movement_php"] < 0:
+                movement_tone = 'bright_red'
             stock_lines.append(
-                f'  trend: {state["direction"]} {format_signed_php(state["movement_php"])} vs previous sample'
+                (
+                    format_detail_line(
+                        'Trend',
+                        f'{state["direction"]} {format_signed_php(state["movement_php"])} vs previous sample',
+                    ),
+                    movement_tone,
+                )
             )
         stock_lines.append(
-            f'  weighted market: {format_php(state["weighted_unit_price"])} | '
-            f'range: {format_php(state["lowest_unit_price"])} to {format_php(state["highest_unit_price"])}'
+            format_detail_line(
+                'Weighted',
+                f'{format_php(state["weighted_unit_price"])} | {format_php(state["lowest_unit_price"])} to {format_php(state["highest_unit_price"])}',
+            )
         )
         if state.get('latest_note'):
-            stock_lines.append(f'  latest note: {state["latest_note"]}')
-        stock_lines.append('')
+            stock_lines.append(format_detail_line('Note', state["latest_note"]))
+        stock_lines.append(SECTION_BREAK)
 
-    if stock_lines and not stock_lines[-1]:
+    if stock_lines and stock_lines[-1] == SECTION_BREAK:
         stock_lines.pop()
 
     print_panel('Per-Stock Market', stock_lines, tone='bright_blue')
