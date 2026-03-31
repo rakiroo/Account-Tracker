@@ -3,9 +3,11 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 import textwrap
+import unicodedata
 from datetime import datetime
 
 DATA_FILE = os.path.expanduser('~/.termux_accounts.json')
@@ -26,6 +28,47 @@ SECTION_BREAK = '__SECTION_BREAK__'
 APP_TITLE = 'MAUS ACCOUNT TRACKER'
 APP_SUBTITLE = 'Phone-ready stock console'
 APP_OWNER = 'Owner codename: MAUS'
+ACCOUNT_FIELD_ALIASES = {
+    'name': 'name',
+    'fullname': 'name',
+    'accountname': 'name',
+    'account': 'name',
+    'user': 'name',
+    'username': 'name',
+    'email': 'email',
+    'mail': 'email',
+    'gmail': 'email',
+    'link': 'link',
+    'url': 'link',
+    'profile': 'link',
+    'profilelink': 'link',
+    'password': 'password',
+    'pass': 'password',
+    'pw': 'password',
+    'fbfs': 'fbfs',
+    'friends': 'fbfs',
+    'friendcount': 'fbfs',
+    'note': 'notes',
+    'notes': 'notes',
+    'remark': 'notes',
+    'remarks': 'notes',
+    'info': 'notes',
+}
+ACCOUNT_FIELD_SYMBOL_ALIASES = {
+    '✉': 'email',
+    '✉️': 'email',
+    '📧': 'email',
+    '🗝': 'password',
+    '🗝️': 'password',
+    '🔑': 'password',
+    '🔗': 'link',
+    '🌐': 'link',
+    '👥': 'fbfs',
+    '👤': 'name',
+    '📝': 'notes',
+}
+EMAIL_PATTERN = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+URL_PATTERN = re.compile(r'^(?:https?://|www\.|[a-z0-9.-]+\.[a-z]{2,}(?:[/?#]|$))', re.IGNORECASE)
 MENU_OPTIONS = (
     ('1', 'Add account', 'Bulk add one stock batch at a time'),
     ('2', 'List accounts', 'See every stored account and store value'),
@@ -287,9 +330,175 @@ def normalize_optional_text(value):
     return cleaned
 
 
+def is_decorative_character(character):
+    if not character:
+        return False
+    if character.isalnum():
+        return False
+    if character in '@/#&.=+_-':
+        return False
+
+    category = unicodedata.category(character)
+    if category.startswith('S'):
+        return True
+    if category in ('Cf', 'Mn'):
+        return True
+    return character in '?:;|~`^*()[]{}<>,'
+
+
+def strip_decorative_prefix(value):
+    text = str(value).strip()
+    while text and (text[0].isspace() or is_decorative_character(text[0])):
+        text = text[1:].lstrip()
+    return text
+
+
+def parse_whole_number_text(value):
+    cleaned = strip_decorative_prefix(value).replace(',', '').replace('_', '').replace(' ', '')
+    if not cleaned:
+        raise ValueError('empty whole number')
+    return int(cleaned)
+
+
+def normalize_account_field_label(value):
+    return ''.join(character for character in str(value).lower() if character.isalnum())
+
+
+def parse_labeled_account_part(value):
+    text = str(value).strip()
+    if not text:
+        return None, None
+
+    match = re.match(r'^(.{1,24}?)\s*[:=]\s*(.*)$', text)
+    if not match:
+        return None, None
+
+    raw_label = match.group(1).strip()
+    field_value = match.group(2).strip()
+    normalized_label = normalize_account_field_label(raw_label)
+    compact_label = ''.join(raw_label.split())
+    field_name = ACCOUNT_FIELD_ALIASES.get(normalized_label) or ACCOUNT_FIELD_SYMBOL_ALIASES.get(compact_label)
+
+    if not field_name:
+        if looks_like_email(field_value):
+            field_name = 'email'
+        elif looks_like_link(field_value):
+            field_name = 'link'
+        elif looks_like_fbfs(field_value):
+            field_name = 'fbfs'
+        elif any(token in normalized_label for token in ('password', 'pass', 'pw', 'key')):
+            field_name = 'password'
+        elif not normalized_label or '?' in raw_label:
+            field_name = 'password'
+
+    if not field_name:
+        return None, None
+
+    return field_name, field_value
+
+
+def looks_like_email(value):
+    return bool(EMAIL_PATTERN.match(strip_decorative_prefix(value)))
+
+
+def looks_like_link(value):
+    text = strip_decorative_prefix(value)
+    if not text or looks_like_email(text):
+        return False
+    return bool(URL_PATTERN.match(text))
+
+
+def looks_like_fbfs(value):
+    try:
+        parse_whole_number_text(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def pop_best_matching_part(parts, predicate):
+    for index, value in enumerate(parts):
+        if predicate(value):
+            return parts.pop(index)
+    return ''
+
+
+def pop_best_name_part(parts):
+    for index, value in enumerate(parts):
+        text = strip_decorative_prefix(value)
+        if ' ' in text:
+            return strip_decorative_prefix(parts.pop(index))
+    for index, value in enumerate(parts):
+        text = strip_decorative_prefix(value)
+        letter_count = sum(character.isalpha() for character in text)
+        if letter_count >= max(3, len(text) // 2):
+            return strip_decorative_prefix(parts.pop(index))
+    return strip_decorative_prefix(parts.pop(0)) if parts else ''
+
+
+def pop_best_password_part(parts):
+    for index, value in enumerate(parts):
+        if ' ' not in str(value).strip():
+            return parts.pop(index)
+    return parts.pop(0) if parts else ''
+
+
+def clean_detected_account_value(field_name, value):
+    text = str(value).strip()
+    if field_name != 'password':
+        text = strip_decorative_prefix(text)
+    if field_name == 'fbfs' and text:
+        try:
+            return str(parse_whole_number_text(text))
+        except ValueError:
+            return text
+    return text
+
+
+def parse_flexible_account_parts(parts):
+    stripped_parts = [str(part).strip() for part in parts if str(part).strip()]
+    if len(stripped_parts) < 4:
+        return None, 'Need at least name, email, password, and fbfs.'
+
+    row = {
+        'name': '',
+        'link': '',
+        'email': '',
+        'password': '',
+        'fbfs': '',
+        'notes': '',
+    }
+    leftovers = []
+
+    for part in stripped_parts:
+        field_name, field_value = parse_labeled_account_part(part)
+        if field_name and not row[field_name]:
+            row[field_name] = clean_detected_account_value(field_name, field_value)
+        else:
+            leftovers.append(part)
+
+    if not row['email']:
+        row['email'] = clean_detected_account_value('email', pop_best_matching_part(leftovers, looks_like_email))
+    if not row['link']:
+        row['link'] = clean_detected_account_value('link', pop_best_matching_part(leftovers, looks_like_link))
+    if not row['fbfs']:
+        detected_fbfs = pop_best_matching_part(leftovers, looks_like_fbfs)
+        if detected_fbfs:
+            row['fbfs'] = clean_detected_account_value('fbfs', detected_fbfs)
+
+    if not row['name']:
+        row['name'] = clean_detected_account_value('name', pop_best_name_part(leftovers))
+    if not row['password']:
+        row['password'] = clean_detected_account_value('password', pop_best_password_part(leftovers))
+    if not row['notes'] and leftovers:
+        row['notes'] = ' | '.join(clean_detected_account_value('notes', part) for part in leftovers if str(part).strip())
+
+    return row, None
+
+
 def normalize_non_negative_int(value, default=0):
     try:
-        normalized = int(value)
+        normalized = parse_whole_number_text(value)
     except (TypeError, ValueError):
         return default
     return normalized if normalized >= 0 else default
@@ -1031,7 +1240,7 @@ def prompt_positive_float(message):
 def prompt_positive_int(message):
     raw_value = prompt_input(message).strip()
     try:
-        value = int(raw_value)
+        value = parse_whole_number_text(raw_value)
     except ValueError:
         print_error('Please enter a whole number.')
         return None
@@ -1076,7 +1285,7 @@ def prompt_edit_fbfs(current_value):
         if raw_value == '':
             return current_fbfs
         try:
-            updated_fbfs = int(raw_value)
+            updated_fbfs = parse_whole_number_text(raw_value)
         except ValueError:
             print_error('fbfs must be a whole number.')
             continue
@@ -1167,7 +1376,7 @@ def create_account_record(data, stock_name, account_name, link, email, password,
         return None, 'Email and password cannot be empty.'
 
     try:
-        fbfs_value = int(fbfs)
+        fbfs_value = parse_whole_number_text(fbfs)
     except (TypeError, ValueError):
         return None, 'fbfs must be a whole number.'
 
@@ -1193,31 +1402,11 @@ def create_account_record(data, stock_name, account_name, link, email, password,
 
 def parse_row_account_line(line):
     parts = [part.strip() for part in line.split('|')]
-    if len(parts) != 6:
-        return None, 'Use 6 fields: name | link | email | password | fbfs | notes'
-
-    return {
-        'name': parts[0],
-        'link': parts[1],
-        'email': parts[2],
-        'password': parts[3],
-        'fbfs': parts[4],
-        'notes': parts[5],
-    }, None
+    return parse_flexible_account_parts(parts)
 
 
 def parse_multiline_account_block(lines):
-    if len(lines) != 6:
-        return None, 'A multiline account block needs exactly 6 lines.'
-
-    return {
-        'name': lines[0].strip(),
-        'link': lines[1].strip(),
-        'email': lines[2].strip(),
-        'password': lines[3].strip(),
-        'fbfs': lines[4].strip(),
-        'notes': lines[5].strip(),
-    }, None
+    return parse_flexible_account_parts(lines)
 
 
 def add_row_account(data, stock_name, row):
@@ -1256,18 +1445,18 @@ def add_account(data):
     print_panel(
         'Paste Guide',
         [
-            'You can paste accounts in either format.',
+            'You can paste accounts in mixed order. MAUS will try to detect which field is which.',
             '',
-            '1) One row: name | link | email | password | fbfs | notes',
-            '2) Six lines in this order:',
-            '   name',
-            '   link',
-            '   email',
-            '   password',
-            '   fbfs',
-            '   notes',
+            '1) One row with | separators in any order',
+            '   Example: email | password | name | fbfs | link | notes',
             '',
-            'Use "-" for blank link or blank notes in multiline mode.',
+            '2) Multiline block, also in any order',
+            '   Example lines: John Doe / john@email.com / pass123 / 1500',
+            '',
+            '3) Labeled fields also work',
+            '   Example: name: John Doe | fbfs: 1500 | email: john@email.com',
+            '',
+            'Link and notes are optional.',
             'Type DONE on its own line when finished.',
         ],
         tone='bright_blue',
@@ -1282,19 +1471,13 @@ def add_account(data):
 
         if stripped.upper() == 'DONE':
             if multiline_buffer:
-                if len(multiline_buffer) == 6:
-                    row, error = parse_multiline_account_block(multiline_buffer)
-                    if error:
-                        print_error(error)
-                    else:
-                        code = add_row_account(data, stock_name, row)
-                        if code:
-                            added_codes.append(code)
+                row, error = parse_multiline_account_block(multiline_buffer)
+                if error:
+                    print_error(error)
                 else:
-                    print_warning(
-                        f'Ignored incomplete multiline block with {len(multiline_buffer)} line(s). '
-                        'Each account needs 6 lines.'
-                    )
+                    code = add_row_account(data, stock_name, row)
+                    if code:
+                        added_codes.append(code)
             break
 
         if '|' in line:
@@ -1316,20 +1499,17 @@ def add_account(data):
             if not multiline_buffer:
                 continue
 
-            if len(multiline_buffer) == 6:
-                row, error = parse_multiline_account_block(multiline_buffer)
-                if error:
-                    print_error(error)
-                else:
-                    code = add_row_account(data, stock_name, row)
-                    if code:
-                        added_codes.append(code)
-                multiline_buffer = []
-            else:
+            row, error = parse_multiline_account_block(multiline_buffer)
+            if error:
                 print_warning(
-                    f'Current multiline block has {len(multiline_buffer)} line(s). '
-                    'Each account needs 6 lines.'
+                    f'Could not detect that block yet ({len(multiline_buffer)} line(s)). '
+                    'Make sure it includes name, email, password, and fbfs.'
                 )
+            else:
+                code = add_row_account(data, stock_name, row)
+                if code:
+                    added_codes.append(code)
+                multiline_buffer = []
             continue
 
         multiline_buffer.append(line)
